@@ -5,6 +5,8 @@ import {
   EXPLAIN_SELECTION_INSTRUCTIONS,
   buildAnalysisPrompt,
   buildQuestionPrompt,
+  buildMultipleChoicePrompt,
+  buildOxShortPrompt,
   buildSelectionPrompt,
   SHORT_ANSWER_GRADING_INSTRUCTIONS,
   QUESTION_ASSIST_INSTRUCTIONS,
@@ -78,7 +80,35 @@ function parseJson(text) {
   }
 }
 
-async function callResponses({ apiKey, model, instructions, prompt, schema, schemaName, reasoningMode, reasoningEffort }) {
+function getJsonErrorPosition(message = "") {
+  const match = String(message || "").match(/position\s+(\d+)/i);
+  return match ? Number(match[1]) : -1;
+}
+
+function makeParseDebug({ text, error, schemaName, model, data }) {
+  const position = getJsonErrorPosition(error?.message || "");
+  const around = position >= 0
+    ? text.slice(Math.max(0, position - 700), Math.min(text.length, position + 700))
+    : "position 정보를 찾지 못했습니다.";
+  const tail = text.slice(Math.max(0, text.length - 1400));
+  return [
+    `schemaName: ${schemaName || "unknown"}`,
+    `model: ${model || "unknown"}`,
+    `responseStatus: ${data?.status || "unknown"}`,
+    `incompleteReason: ${data?.incomplete_details?.reason || "none"}`,
+    `outputLength: ${text.length}`,
+    `errorPosition: ${position}`,
+    `usage: ${JSON.stringify(data?.usage || {})}`,
+    "",
+    "[오류 위치 주변]",
+    around,
+    "",
+    "[응답 마지막 부분]",
+    tail
+  ].join("\n");
+}
+
+async function callResponses({ apiKey, model, instructions, prompt, schema, schemaName, reasoningMode, reasoningEffort, maxOutputTokens = 12000 }) {
   if (!apiKey) throw new Error("API 키가 없습니다. 데모 모드를 사용하거나 키를 입력해 주세요.");
 
   const body = {
@@ -86,7 +116,7 @@ async function callResponses({ apiKey, model, instructions, prompt, schema, sche
     instructions,
     input: prompt,
     store: false,
-    max_output_tokens: 12000,
+    max_output_tokens: maxOutputTokens,
     text: {
       format: {
         type: "json_schema",
@@ -137,11 +167,16 @@ async function callResponses({ apiKey, model, instructions, prompt, schema, sche
     const preview = raw ? raw.slice(0, 500) : "empty response";
     throw new Error(`모델 응답에서 텍스트를 찾지 못했습니다. 응답 미리보기: ${preview}`);
   }
+  if (data?.status === "incomplete") {
+    const details = makeParseDebug({ text, error: new Error("incomplete"), schemaName, model, data });
+    throw new Error(`모델 출력이 중간에 잘렸습니다. schema=${schemaName}, reason=${data?.incomplete_details?.reason || "unknown"}.\n\n${details}`);
+  }
   try {
     return parseJson(text);
   } catch (error) {
     const preview = text.slice(0, 800);
-    throw new Error(`모델 JSON 파싱 실패: ${error.message}. 응답 미리보기: ${preview}`);
+    const details = makeParseDebug({ text, error, schemaName, model, data });
+    throw new Error(`모델 JSON 파싱 실패: ${error.message}. 응답 미리보기: ${preview}\n\n${details}`);
   }
 }
 
@@ -177,16 +212,66 @@ export async function cleanupPassageWithAi({ apiKey, model, passage }) {
   });
 }
 
-export async function generateQuestions({ apiKey, model, reasoningMode, reasoningEffort, passage, analysis }) {
+const MULTIPLE_CHOICE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["multipleChoice", "weaknessGuide"],
+  properties: {
+    multipleChoice: QUESTION_SCHEMA.properties.multipleChoice,
+    weaknessGuide: QUESTION_SCHEMA.properties.weaknessGuide
+  }
+};
+
+const OX_SHORT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["ox", "shortAnswer", "weaknessGuide"],
+  properties: {
+    ox: QUESTION_SCHEMA.properties.ox,
+    shortAnswer: QUESTION_SCHEMA.properties.shortAnswer,
+    weaknessGuide: QUESTION_SCHEMA.properties.weaknessGuide
+  }
+};
+
+export async function generateQuestions({ apiKey, model, reasoningMode, reasoningEffort, passage, analysis, options }) {
   return callResponses({
     apiKey,
     model,
     reasoningMode,
     reasoningEffort,
     instructions: QUESTION_INSTRUCTIONS,
-    prompt: buildQuestionPrompt(passage, analysis),
+    prompt: buildQuestionPrompt(passage, analysis, options),
     schema: QUESTION_SCHEMA,
-    schemaName: "korean_question_set"
+    schemaName: "korean_question_set",
+    maxOutputTokens: 18000
+  });
+}
+
+export async function generateMultipleChoiceQuestions({ apiKey, model, reasoningMode, reasoningEffort, passage, analysis, options }) {
+  return callResponses({
+    apiKey,
+    model,
+    reasoningMode,
+    reasoningEffort,
+    instructions: QUESTION_INSTRUCTIONS,
+    prompt: buildMultipleChoicePrompt(passage, analysis, options),
+    schema: MULTIPLE_CHOICE_SCHEMA,
+    schemaName: "korean_multiple_choice_set",
+    maxOutputTokens: 16000
+  });
+}
+
+export async function generateOxShortQuestions({ apiKey, model, reasoningMode, reasoningEffort, passage, analysis, options }) {
+  return callResponses({
+    apiKey,
+    model,
+    reasoningMode,
+    reasoningEffort,
+    instructions: QUESTION_INSTRUCTIONS,
+    prompt: buildOxShortPrompt(passage, analysis, options),
+    schema: OX_SHORT_SCHEMA,
+    schemaName: "korean_ox_short_question_set",
+    maxOutputTokens: 15000
   });
 }
 

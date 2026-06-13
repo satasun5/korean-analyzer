@@ -200,14 +200,135 @@ X 문장은 노골적인 반대가 아니라 주체·범위·조건·인과·문
 
 해설은 학생이 왜 헷갈리는지까지 설명해야 한다. 단, 문제 화면에서 사용자가 먼저 풀 수 있도록 정답·근거·해설은 채점 전에는 노출되지 않는다.`;
 
-export function buildQuestionPrompt(passage, analysis) {
-  return `다음 지문과 분석 결과를 바탕으로 국어 학습용 문제 세트를 만들어라.
+function normalizeQuestionOptions(options = {}) {
+  const amount = options.amount || "medium";
+  const difficulty = options.difficulty || "medium";
+  const counts = options.counts || {};
+  const lengths = options.lengths || {};
+  const typeDifficulties = options.typeDifficulties || {};
+  return {
+    mode: options.singlePass ? "single" : "split",
+    amount,
+    difficulty,
+    counts: {
+      multipleChoice: Number(counts.multipleChoice || 5),
+      ox: Number(counts.ox || 10),
+      shortAnswer: Number(counts.shortAnswer || 5)
+    },
+    lengths: {
+      multipleChoice: Number(lengths.multipleChoice || 2),
+      ox: Number(lengths.ox || 2),
+      shortAnswer: Number(lengths.shortAnswer || 2)
+    },
+    typeDifficulties: {
+      multipleChoice: typeDifficulties.multipleChoice || difficulty,
+      ox: typeDifficulties.ox || difficulty,
+      shortAnswer: typeDifficulties.shortAnswer || difficulty
+    }
+  };
+}
 
-지문:
+function questionOptionGuide(options = {}) {
+  const o = normalizeQuestionOptions(options);
+  return `
+[문제 제작 설정]
+- 생성 방식: ${o.mode === "single" ? "단일 호출. 모든 유형을 한 번에 만들되 출력은 더 압축한다." : "분리 호출. 5지선다를 먼저 정교하게 만들고, OX와 서술형을 별도 호출로 만든다."}
+- 전체 난이도: ${o.difficulty}
+- 문제 수 프리셋: ${o.amount}
+- 5지선다 개수: ${o.counts.multipleChoice}개
+- OX 개수: ${o.counts.ox}개
+- 서술형 개수: ${o.counts.shortAnswer}개
+- 5지선다 난이도: ${o.typeDifficulties.multipleChoice}
+- OX 난이도: ${o.typeDifficulties.ox}
+- 서술형 난이도: ${o.typeDifficulties.shortAnswer}
+- 5지선다 선지 길이 단계: ${o.lengths.multipleChoice} / 3
+- OX 진술 길이 단계: ${o.lengths.ox} / 3
+- 서술형 모범답안 길이 단계: ${o.lengths.shortAnswer} / 3
+
+[난이도 기준]
+- 상: 모든 선지가 1회 이상의 꼼꼼한 독해와 추론을 필요로 한다. 여러 문단의 인과 관계를 연결해야 하는 문항과 보기 적용·추론 문제가 많아야 한다.
+- 중: 지문 전체를 읽지 않으면 매력적인 오답에 걸리도록 만든다. 개념 확인과 추론 문제를 섞고, 주요 내용을 완벽하게 이해했는지 확인한다.
+- 하: 내용을 꼼꼼히 읽었는지 확인하는 정도다. 개념 확인, 내용 일치, 전제 추론을 적절히 섞는다.
+
+[출력 압축 규칙]
+- 위 개수는 절대값이 아니라 목표 기준이다. 지문이 짧거나 JSON이 길어질 위험이 있으면 허용 범위 안에서 줄여도 된다. 품질과 JSON 완성을 개수보다 우선한다.
+- choiceDesignFirst.reasonBeforeWritingChoice는 90~150자 정도로 압축한다.
+- choices.explanation은 80~150자 정도로 압축한다.
+- finalExplanation은 180~360자 정도로 압축한다.
+- 지문 전체나 분석 전체를 다시 베끼지 않는다. 필요한 근거 구절만 짧게 사용한다.
+- JSON이 길어져 끊기지 않도록 같은 설명을 반복하지 않는다.`;
+}
+
+function compactQuestionContext(analysis) {
+  return {
+    title: analysis?.title,
+    field: analysis?.field,
+    overallSummary: analysis?.overallSummary,
+    readingGuide: analysis?.readingGuide,
+    paragraphs: analysis?.paragraphs,
+    flow: analysis?.flow,
+    structureTimeline: analysis?.structureTimeline,
+    comparisons: analysis?.comparisons,
+    glossary: analysis?.glossary,
+    trickySentences: analysis?.trickySentences,
+    highlights: analysis?.highlights
+  };
+}
+
+export function buildQuestionPrompt(passage, analysis, options = {}) {
+  return `다음 지문과 분석 결과를 바탕으로 국어 학습용 문제 세트를 만들어라.
+단일 호출 모드이므로 5지선다, OX, 서술형을 모두 만들되 출력량을 압축하여 유효한 JSON을 끝까지 완성하라.
+${questionOptionGuide({ ...options, singlePass: true })}
+
+[지문]
 ${passage}
 
-분석 결과 요약:
-${JSON.stringify(analysis, null, 2)}`;
+[분석 결과 요약]
+${JSON.stringify(compactQuestionContext(analysis), null, 2)}`;
+}
+
+export function buildMultipleChoicePrompt(passage, analysis, options = {}) {
+  return `다음 지문과 분석 결과를 바탕으로 5지선다 문제만 만들어라.
+OX와 서술형은 만들지 말고, 출력 JSON에는 multipleChoice와 weaknessGuide만 포함한다.
+${questionOptionGuide(options)}
+
+[5지선다 추가 지시]
+- 목표 개수에 가깝게 생성하되, 지문 길이와 출력 안정성을 고려해 ±1개까지 조정해도 된다.
+- 난이도 상이면 보기 적용형, 문단 결합형, 추론형을 우선한다.
+- 난이도 중이면 개념 확인형과 추론형을 균형 있게 섞는다.
+- 난이도 하이면 내용 일치와 개념 범위 확인을 중심으로 하되, 쉬운 전제 추론을 조금 섞는다.
+- 각 문항은 반드시 5개 선지를 가진다.
+- 정답 번호는 한 번호에 몰리지 않게 분산한다.
+
+[지문]
+${passage}
+
+[분석 결과 요약]
+${JSON.stringify(compactQuestionContext(analysis), null, 2)}`;
+}
+
+export function buildOxShortPrompt(passage, analysis, options = {}) {
+  return `다음 지문과 분석 결과를 바탕으로 OX 퀴즈와 서술형 문제만 만들어라.
+5지선다는 만들지 말고, 출력 JSON에는 ox, shortAnswer, weaknessGuide만 포함한다.
+${questionOptionGuide(options)}
+
+[OX 추가 지시]
+- 목표 개수에 가깝게 생성하되, 지문 길이와 출력 안정성을 고려해 ±2개까지 조정해도 된다.
+- O와 X의 비율이 한쪽으로 심하게 몰리지 않게 한다.
+- X는 노골적인 반대보다 주체, 범위, 조건, 인과, 문단 연결 중 하나를 미세하게 바꾸어 만든다.
+
+[서술형 추가 지시]
+- 목표 개수에 가깝게 생성하되, 지문 길이와 출력 안정성을 고려해 ±1개까지 조정해도 된다.
+- 난이도 상이면 보기 적용, 여러 문단 결합, 이유 설명, 관점 비교를 많이 넣는다.
+- 난이도 중이면 개념 확인과 추론을 섞는다.
+- 난이도 하이면 내용 이해, 개념 범위, 쉬운 전제 추론을 중심으로 한다.
+- 모범답안과 채점 기준은 정확하되 반복을 줄여 JSON을 끝까지 완성한다.
+
+[지문]
+${passage}
+
+[분석 결과 요약]
+${JSON.stringify(compactQuestionContext(analysis), null, 2)}`;
 }
 
 export const EXPLAIN_SELECTION_INSTRUCTIONS = `너는 국어 지문을 고등학생에게 설명하는 튜터다.

@@ -1,4 +1,4 @@
-import { analyzePassage, generateQuestions, explainSelection, askAboutQuestion, cleanupPassageWithAi, gradeShortAnswer, gradeShortAnswersBatch, askAboutMemo, askChatBots } from "./ai.js";
+import { analyzePassage, generateQuestions, generateMultipleChoiceQuestions, generateOxShortQuestions, explainSelection, askAboutQuestion, cleanupPassageWithAi, gradeShortAnswer, gradeShortAnswersBatch, askAboutMemo, askChatBots } from "./ai.js";
 import { createDemoAnalysis, createDemoQuestions, SAMPLE_PASSAGE } from "./sample.js";
 import { loadRecords, saveRecord, deleteRecord, loadSettings, saveSettings } from "./storage.js";
 
@@ -14,6 +14,38 @@ const HIGHLIGHT_LABELS = {
   support: "부연·균형"
 };
 
+const EXPORT_TYPE_LABELS = {
+  pdf: "PDF",
+  markdown: "Markdown",
+  text: "TXT"
+};
+
+const EXPORT_OPTION_LABELS = {
+  passage: "본문",
+  passageHighlights: "본문 형광펜·주석",
+  summary: "요약",
+  structure: "구조",
+  concepts: "개념",
+  questions: "문제",
+  includeSolutions: "해설 포함",
+  notes: "메모",
+  comments: "AI 댓글"
+};
+
+function createDefaultExportOptions() {
+  return {
+    passage: true,
+    passageHighlights: true,
+    summary: true,
+    structure: true,
+    concepts: true,
+    questions: true,
+    includeSolutions: true,
+    notes: true,
+    comments: true
+  };
+}
+
 const MODEL_PRESETS = [
   { id: "gpt-4.1-mini", label: "GPT-4.1 mini", tag: "저비용 기본", input: "가격표 확인", output: "가격표 확인", reasoning: false, note: "현재 입력창 기본값입니다. 계정에서 사용 가능해야 합니다." },
   { id: "gpt-5.4", label: "GPT-5.4", tag: "균형형", input: "$2.50 / 1M", output: "$15.00 / 1M", reasoning: true, note: "비용과 품질 균형. 공식 비교표 기준." },
@@ -24,12 +56,51 @@ const MODEL_PRESETS = [
 
 const OCR_GUIDE = "OCR 지문은 문단 사이에 빈 줄 한 줄을 넣어 주세요. 문단 내부의 강제 줄바꿈은 [OCR 정리]로 한 문단 안에서 이어 붙일 수 있습니다.";
 
+const CHAT_PROFILE_COUNT = 6;
+const CHAT_PROFILE_BASE = "assets/chat-profiles/profile";
+const CHAT_PROFILE_EXT = "webp";
+
+
+const QUESTION_AMOUNT_PRESETS = {
+  small: { label: "적음", multipleChoice: 4, ox: 5, shortAnswer: 3 },
+  medium: { label: "보통", multipleChoice: 5, ox: 10, shortAnswer: 5 },
+  large: { label: "많음", multipleChoice: 8, ox: 15, shortAnswer: 7 }
+};
+const QUESTION_DIFFICULTY_LABELS = { low: "하", medium: "중", high: "상" };
+const QUESTION_LENGTH_LABELS = { 1: "짧게", 2: "보통", 3: "길게" };
+
+function createDefaultQuestionSettings() {
+  return {
+    difficulty: "medium",
+    amount: "medium",
+    singlePass: false,
+    advancedOpen: false,
+    counts: { multipleChoice: 5, ox: 10, shortAnswer: 5 },
+    lengths: { multipleChoice: 2, ox: 2, shortAnswer: 2 },
+    typeDifficulties: { multipleChoice: "medium", ox: "medium", shortAnswer: "medium" }
+  };
+}
+
+function mergeQuestionSettings(saved = {}) {
+  const base = createDefaultQuestionSettings();
+  const merged = {
+    ...base,
+    ...(saved || {}),
+    counts: { ...base.counts, ...(saved?.counts || {}) },
+    lengths: { ...base.lengths, ...(saved?.lengths || {}) },
+    typeDifficulties: { ...base.typeDifficulties, ...(saved?.typeDifficulties || {}) }
+  };
+  return normalizeQuestionSettings(merged);
+}
+
 
 const state = {
   started: false,
   theme: loadSettings().theme || "light",
   tab: "summary",
   questionTab: "mc",
+  questionSettings: mergeQuestionSettings(loadSettings().questionSettings),
+  readerAskCollapsed: false,
   passage: "",
   analysis: null,
   questions: null,
@@ -46,7 +117,9 @@ const state = {
   demoMode: loadSettings().demoMode ?? true,
   loading: null,
   loadingProgress: 0,
+  questionPhase: "",
   records: loadRecords(),
+  currentRecordId: null,
   mindPositions: {},
   mindPan: { x: 0, y: 0 },
   mindZoom: 1,
@@ -83,7 +156,10 @@ const state = {
   botChatLoading: false,
   botReplyInputs: {},
   botReplyOpen: {},
-  botReplyLoading: null
+  botReplyLoading: null,
+  exportOpen: false,
+  exportType: "pdf",
+  exportOptions: createDefaultExportOptions()
 };
 
 document.documentElement.dataset.theme = state.theme;
@@ -137,7 +213,8 @@ function persistSettings() {
     gradingModel: state.gradingModel,
     useReasoning: state.useReasoning,
     reasoningEffort: state.reasoningEffort,
-    demoMode: state.demoMode
+    demoMode: state.demoMode,
+    questionSettings: normalizeQuestionSettings(state.questionSettings)
   });
 }
 
@@ -152,6 +229,64 @@ function structuredCloneSafe(value) {
     return JSON.parse(JSON.stringify(value || {}));
   }
 }
+
+function normalizeQuestionSettings(value = {}) {
+  const base = createDefaultQuestionSettings();
+  const next = {
+    ...base,
+    ...(value || {}),
+    counts: { ...base.counts, ...(value?.counts || {}) },
+    lengths: { ...base.lengths, ...(value?.lengths || {}) },
+    typeDifficulties: { ...base.typeDifficulties, ...(value?.typeDifficulties || {}) }
+  };
+  if (!["low", "medium", "high"].includes(next.difficulty)) next.difficulty = "medium";
+  if (!["small", "medium", "large"].includes(next.amount)) next.amount = "medium";
+  if (next.singlePass) {
+    if (next.difficulty === "high") next.difficulty = "medium";
+    if (next.amount === "large") next.amount = "medium";
+  }
+  next.counts.multipleChoice = clamp(Number(next.counts.multipleChoice || 5), 1, 12);
+  next.counts.ox = clamp(Number(next.counts.ox || 10), 1, 30);
+  next.counts.shortAnswer = clamp(Number(next.counts.shortAnswer || 5), 1, 10);
+  for (const key of ["multipleChoice", "ox", "shortAnswer"]) {
+    next.lengths[key] = clamp(Number(next.lengths[key] || 2), 1, 3);
+    if (!["low", "medium", "high"].includes(next.typeDifficulties[key])) next.typeDifficulties[key] = next.difficulty;
+  }
+  return next;
+}
+
+function getEffectiveQuestionSettings() {
+  const settings = normalizeQuestionSettings(state.questionSettings);
+  if (!settings.advancedOpen) {
+    const preset = QUESTION_AMOUNT_PRESETS[settings.amount] || QUESTION_AMOUNT_PRESETS.medium;
+    settings.counts = { multipleChoice: preset.multipleChoice, ox: preset.ox, shortAnswer: preset.shortAnswer };
+    settings.lengths = { multipleChoice: 2, ox: 2, shortAnswer: 2 };
+    settings.typeDifficulties = { multipleChoice: settings.difficulty, ox: settings.difficulty, shortAnswer: settings.difficulty };
+  }
+  if (settings.singlePass) {
+    settings.counts.multipleChoice = Math.min(settings.counts.multipleChoice, 5);
+    settings.counts.ox = Math.min(settings.counts.ox, 10);
+    settings.counts.shortAnswer = Math.min(settings.counts.shortAnswer, 5);
+  }
+  return normalizeQuestionSettings(settings);
+}
+
+function setQuestionSettings(patch = {}) {
+  state.questionSettings = normalizeQuestionSettings({ ...state.questionSettings, ...patch });
+  persistSettings();
+}
+
+function setQuestionNestedSetting(group, key, value) {
+  const current = normalizeQuestionSettings(state.questionSettings);
+  current[group] = { ...(current[group] || {}), [key]: value };
+  state.questionSettings = normalizeQuestionSettings(current);
+  persistSettings();
+}
+
+function questionDifficultyText(value) {
+  return QUESTION_DIFFICULTY_LABELS[value] || "중";
+}
+
 
 function escapeHtml(value = "") {
   return String(value)
@@ -664,6 +799,7 @@ function renderApp() {
       ${renderSideMenu()}
       ${renderModelPicker()}
       ${renderLogPanel()}
+      ${renderExportModal()}
       <div class="toast-stack" id="toastStack">${renderToastItems()}</div>
     </main>`;
 }
@@ -683,6 +819,7 @@ function renderTopbar() {
         <button class="btn small" id="newNoteBtn">새 분석 노트</button>
         <button class="btn small" id="sampleBtn">${state.sampleActive ? "내 지문" : "샘플"}</button>
         <button class="btn small" id="saveBtn" ${state.analysis ? "" : "disabled"}>저장</button>
+        <button class="btn small primary" id="exportBtn" ${state.analysis ? "" : "disabled"}>내보내기</button>
         <button class="btn small menu-btn" id="menuBtn" title="설정 열기">☰ 메뉴</button>
       </div>
     </header>`;
@@ -792,21 +929,35 @@ function renderEditor() {
 }
 
 function renderLoading() {
+  const isQuestion = state.loading === "questions";
+  const questionPhase = state.questionPhase || "문제 제작 준비";
   const steps = state.loading === "analysis"
     ? ["문단 분리", "띄어쓰기 정돈", "핵심 주장 탐색", "형광펜 설계", "마인드맵 구성", "학습 포인트 정리"]
     : state.loading === "note"
       ? ["선택 구절 확인", "앞뒤 문맥 연결", "쉬운 설명 작성", "시험 포인트 정리"]
       : state.loading === "cleanup"
         ? ["OCR 문장 확인", "띄어쓰기 정돈", "문단 보존", "지문 입력창 반영"]
-        : ["출제 의도 설계", "선지별 정답/오답 이유 설계", "5지선다 구성", "OX 퀴즈 구성", "서술형 채점 기준 작성"];
+        : state.questionSettings?.singlePass
+          ? ["출제 범위 압축", "5지선다 구성", "OX 구성", "서술형 구성", "JSON 마무리"]
+          : (questionPhase.includes("OX") || questionPhase.includes("서술형"))
+            ? ["2차 호출 시작", "OX 진술 설계", "서술형 질문 설계", "채점 기준 작성", "JSON 마무리"]
+            : ["1차 호출 시작", "출제 의도 설계", "선지별 함정 설계", "5지선다 구성", "JSON 마무리"];
   const activeIndex = Math.min(steps.length - 1, Math.floor((state.loadingProgress / 100) * steps.length));
+  const title = state.loading === "analysis"
+    ? "분석 중이에요. 잠시만 기다려 주세요"
+    : state.loading === "note"
+      ? "메모 설명 생성 중"
+      : state.loading === "cleanup"
+        ? "AI 지문 정돈 중"
+        : `문제 제작 중이에요 · ${questionPhase}`;
   return `
     <div class="card loading-card-strong">
-      <h3>${state.loading === "analysis" ? "분석 중이에요. 잠시만 기다려 주세요" : state.loading === "note" ? "메모 설명 생성 중" : state.loading === "cleanup" ? "AI 지문 정돈 중" : "문제 제작 중이에요. 잠시만 기다려 주세요"}</h3>
+      <h3>${escapeHtml(title)}</h3>
       <div class="progress"><span style="width:${state.loadingProgress}%"></span></div>
       <div class="loading-steps">
-        ${steps.map((s, i) => `<div class="loading-step ${i === activeIndex ? "active" : ""}">${i <= activeIndex ? "✦" : "·"} ${s}</div>`).join("")}
+        ${steps.map((s, i) => `<div class="loading-step ${i === activeIndex ? "active" : ""}">${i <= activeIndex ? "✦" : "·"} ${escapeHtml(s)}</div>`).join("")}
       </div>
+      ${isQuestion && !state.questionSettings?.singlePass ? `<p class="notice compact">호출을 2번으로 나누어 진행합니다. 1차가 끝나면 게이지가 다시 차면서 2차 OX·서술형 제작을 시작합니다.</p>` : ""}
     </div>`;
 }
 
@@ -834,6 +985,14 @@ function getReaderQuestionSuggestions() {
 }
 
 function renderReaderAskCard() {
+  if (state.readerAskCollapsed) {
+    return `<div class="reader-ai-card collapsed">
+      <div class="reader-ai-head compact-head">
+        <div><b>AI에게 질문하기</b><span>답변은 메모 탭에 저장됩니다</span></div>
+        <button class="btn icon-only" id="toggleReaderAskBtn" title="펼치기" aria-label="펼치기">⌄</button>
+      </div>
+    </div>`;
+  }
   const fallbackSuggestions = [
     "이 지문에서 제일 헷갈리기 쉬운 논리 연결을 설명해줘",
     "핵심 개념을 쉬운 예시로 설명해줘",
@@ -847,7 +1006,10 @@ function renderReaderAskCard() {
   return `<div class="reader-ai-card">
     <div class="reader-ai-head">
       <div><b>AI에게 질문하기</b><span>답변은 메모 탭에 저장됩니다${state.selectedText ? ` · 현재 선택: “${escapeHtml(shorten(state.selectedText, 34))}”` : ""}</span></div>
-      ${state.memoAskLoading ? `<div class="tiny-loader"><span></span>답변 작성 중</div>` : ""}
+      <div class="reader-ai-actions">
+        ${state.memoAskLoading ? `<div class="tiny-loader"><span></span>답변 작성 중</div>` : ""}
+        <button class="btn icon-only" id="toggleReaderAskBtn" title="접기" aria-label="접기">⌃</button>
+      </div>
     </div>
     <div class="suggestion-row">${suggestions.map((q) => `<button class="suggestion-chip" data-reader-quick="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>
     <div class="inline-control memo-inline">
@@ -996,26 +1158,85 @@ function renderConceptsTab() {
     </div>`;
 }
 
+function renderQuestionSetup() {
+  const settings = normalizeQuestionSettings(state.questionSettings);
+  const effective = getEffectiveQuestionSettings();
+  const disabledHigh = settings.singlePass;
+  const disabledLarge = settings.singlePass;
+  const diffItems = [["low", "하"], ["medium", "중"], ["high", "상"]];
+  const amountItems = [["small", "적음"], ["medium", "보통"], ["large", "많음"]];
+  const typeRows = [
+    ["multipleChoice", "5지선다", 1, 12, "문항", "선지 길이"],
+    ["ox", "OX", 1, 30, "개", "진술 길이"],
+    ["shortAnswer", "서술형", 1, 10, "문항", "답안 길이"]
+  ];
+  return `<section class="question-setup-card">
+    <div class="question-setup-head">
+      <div>
+        <h3>문제 제작 설정</h3>
+        <p>기본 설정으로 빠르게 만들거나, 고급 설정에서 유형별 개수·난이도·길이를 조절할 수 있습니다.</p>
+      </div>
+      <button class="btn soft" id="questionBtn">${state.questions ? "문제 다시 제작" : "문제 제작 시작"}</button>
+    </div>
+    <div class="question-basic-grid">
+      <div class="question-basic-block">
+        <b>난이도</b>
+        <div class="segmented-row">
+          ${diffItems.map(([id, label]) => {
+            const disabled = disabledHigh && id === "high";
+            return `<button class="seg-btn ${settings.difficulty === id ? "active" : ""}" data-question-setting="difficulty" data-value="${id}" ${disabled ? "disabled" : ""}>${label}</button>`;
+          }).join("")}
+        </div>
+        <p>${settings.singlePass ? "단일 호출 모드에서는 난이도 상을 막아 출력 부담을 줄입니다." : "상은 문단 결합과 보기 추론이 많고, 하는 꼼꼼한 내용 확인 중심입니다."}</p>
+      </div>
+      <div class="question-basic-block">
+        <b>문제 수</b>
+        <div class="segmented-row">
+          ${amountItems.map(([id, label]) => {
+            const disabled = disabledLarge && id === "large";
+            return `<button class="seg-btn ${settings.amount === id ? "active" : ""}" data-question-setting="amount" data-value="${id}" ${disabled ? "disabled" : ""}>${label}</button>`;
+          }).join("")}
+        </div>
+        <p>현재 기준: 5지선다 ${effective.counts.multipleChoice}문항 · OX ${effective.counts.ox}개 · 서술형 ${effective.counts.shortAnswer}문항</p>
+      </div>
+      <label class="single-pass-card">
+        <input type="checkbox" id="singlePassQuestions" ${settings.singlePass ? "checked" : ""} />
+        <span><b>추론 호출 한 번만 사용</b><em>비용과 시간을 줄이지만 문제 품질이 낮아질 수 있어요. 선택 시 난이도 상·문제 수 많음은 비활성화됩니다.</em></span>
+      </label>
+    </div>
+    <details class="advanced-question-box" ${settings.advancedOpen ? "open" : ""}>
+      <summary>고급 설정</summary>
+      <div class="advanced-question-grid">
+        ${typeRows.map(([key, label, min, max, unit, lengthLabel]) => `
+          <div class="advanced-question-row">
+            <div class="advanced-row-title"><b>${label}</b><span>${effective.counts[key]}${unit} · 난이도 ${questionDifficultyText(effective.typeDifficulties[key])} · ${QUESTION_LENGTH_LABELS[effective.lengths[key]]}</span></div>
+            <label>개수 <input type="range" min="${min}" max="${max}" value="${settings.counts[key]}" data-question-count="${key}" /></label>
+            <label>난이도 <input type="range" min="1" max="3" value="${settings.typeDifficulties[key] === "low" ? 1 : settings.typeDifficulties[key] === "high" ? 3 : 2}" data-question-difficulty="${key}" /></label>
+            <label>${lengthLabel} <input type="range" min="1" max="3" value="${settings.lengths[key]}" data-question-length="${key}" /></label>
+          </div>`).join("")}
+      </div>
+    </details>
+  </section>`;
+}
+
+
 function renderQuestionsTab() {
   if (state.loading === "questions") {
-    return `<div class="kv"><div class="card question-loading-card">${renderLoading()}<p class="notice compact">문제를 제작 중이에요. 선지별 정답/오답 이유를 먼저 설계하고 있어서 마지막 단계가 조금 오래 걸릴 수 있습니다.</p></div></div>`;
+    return `<div class="kv"><div class="card question-loading-card">${renderLoading()}<p class="notice compact">문제를 제작 중이에요. ${state.questionSettings?.singlePass ? "단일 호출로 모든 유형을 압축 생성하고 있습니다." : "현재 단계가 끝나면 게이지가 다시 차며 다음 호출로 넘어갑니다."}</p></div></div>`;
   }
   if (!state.analysis) {
     return `<div class="empty">먼저 지문을 분석하면 문제를 제작할 수 있습니다.</div>`;
   }
+  const setup = renderQuestionSetup();
   if (!state.questions) {
-    return `<div class="empty question-start-card">
-      <b>아직 제작된 문제가 없습니다.</b><br>
-      분석 결과를 바탕으로 5지선다, OX, 서술형 문제를 따로 생성합니다.
-      <button class="btn primary" id="questionBtn" style="margin-top:14px">문제 제작 시작</button>
-    </div>`;
+    return `${setup}<div class="empty question-start-card subtle-empty"><b>아직 제작된 문제가 없습니다.</b><br>위 설정을 확인한 뒤 문제 제작을 시작하세요.</div>`;
   }
   return `
+    ${setup}
     <div class="question-tab-head">
       <div class="tabs" style="padding:0;border:0">
         ${[["mc", "5지선다"], ["ox", "OX"], ["short", "서술형"]].map(([id, label]) => `<button class="tab ${state.questionTab === id ? "active" : ""}" data-qtab="${id}">${label}</button>`).join("")}
       </div>
-      <button class="btn small" id="questionBtn">문제 다시 제작</button>
     </div>
     ${state.questionTab === "mc" ? renderMultipleChoice() : state.questionTab === "ox" ? renderOx() : renderShortAnswer()}`;
 }
@@ -1168,7 +1389,7 @@ function renderSavedTab() {
   const records = state.records || [];
   return `<section class="saved-records-card standalone-card">
     <div class="saved-headline"><b>저장된 분석 노트</b><span>${records.length}개</span></div>
-    ${records.length ? `<div class="saved-list">${records.map((r) => `<div class="card saved-item"><div><h4>${escapeHtml(r.title)}</h4><p>${escapeHtml(new Date(r.createdAt).toLocaleString())} · ${escapeHtml(r.field || "")}</p></div><div><button class="btn small" data-load-record="${r.id}">열기</button><button class="btn small danger" data-del-record="${r.id}">삭제</button></div></div>`).join("")}</div>` : `<div class="empty compact-empty">저장된 분석이 없습니다.</div>`}
+    ${records.length ? `<div class="saved-list">${records.map((r) => `<div class="card saved-item"><div><h4>${escapeHtml(r.title)}</h4><p>${escapeHtml(new Date(r.updatedAt || r.createdAt).toLocaleString())} · ${escapeHtml(r.field || "")}</p></div><div><button class="btn small" data-load-record="${r.id}">열기</button><button class="btn small danger" data-del-record="${r.id}">삭제</button></div></div>`).join("")}</div>` : `<div class="empty compact-empty">저장된 분석이 없습니다.</div>`}
   </section>`;
 }
 
@@ -1201,6 +1422,21 @@ function renderBotThread(thread) {
   </article>`;
 }
 
+function getBotAvatarSrc(comment = {}) {
+  const raw = Number(comment.avatarId || 1);
+  const id = Math.max(1, Math.min(CHAT_PROFILE_COUNT, Number.isFinite(raw) ? Math.round(raw) : 1));
+  return `${CHAT_PROFILE_BASE}-${id}.${CHAT_PROFILE_EXT}`;
+}
+
+function renderBotAvatar(comment = {}) {
+  const initial = escapeHtml(getBotInitial(comment.author));
+  const src = escapeHtml(getBotAvatarSrc(comment));
+  return `<div class="bot-avatar" data-avatar-id="${escapeHtml(comment.avatarId || 1)}">
+    <img src="${src}" alt="" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid';" />
+    <span>${initial}</span>
+  </div>`;
+}
+
 function renderBotComment(comment, threadId, depth = 0) {
   const key = `${threadId}:${comment.id}`;
   const open = !!state.botReplyOpen[key];
@@ -1209,7 +1445,7 @@ function renderBotComment(comment, threadId, depth = 0) {
   const replies = comment.replyThreads || [];
   const sideReplies = ensureArray(comment.sideReplies);
   return `<div class="bot-comment depth-${Math.min(depth, 2)}">
-    <div class="bot-avatar">${escapeHtml(getBotInitial(comment.author))}</div>
+    ${renderBotAvatar(comment)}
     <div class="bot-bubble">
       <div class="bot-meta"><b>${escapeHtml(comment.author || "익명의 독자")}</b><time>${escapeHtml(comment.timeLabel || "방금 전")}</time></div>
       <p>${escapeHtml(comment.text || "음... 이건 지문을 한 번 더 붙잡아 봐야겠는데?")}</p>
@@ -1301,6 +1537,434 @@ function renderModelPicker() {
     </section>`;
 }
 
+
+function getExportOptions() {
+  const base = { ...createDefaultExportOptions(), ...(state.exportOptions || {}) };
+  if (!base.passage) base.passageHighlights = false;
+  if (!state.questions) {
+    base.questions = false;
+    base.includeSolutions = false;
+  }
+  if (!base.questions) base.includeSolutions = false;
+  return base;
+}
+
+function renderExportModal() {
+  if (!state.exportOpen) return "";
+  const options = getExportOptions();
+  const hasQuestions = !!state.questions;
+  const hasNotes = ensureArray(state.notes).length > 0;
+  const hasComments = ensureArray(state.botChatThreads).length > 0;
+  const optionRows = [
+    ["passage", "본문", "정돈된 지문 본문을 A4 중앙에 배치"],
+    ["passageHighlights", "본문 형광펜·주석", "형광펜 구절 설명을 양옆 주석 카드로 배치", !options.passage],
+    ["summary", "요약", "제목·난이도·요약·읽는 법"],
+    ["structure", "구조", "전개 흐름·구조 타임라인·비교 대조"],
+    ["concepts", "개념", "개념 사전·헷갈리는 문장"],
+    ["questions", "문제", hasQuestions ? "5지선다·OX·서술형" : "문제 제작 후 선택 가능", !hasQuestions],
+    ["includeSolutions", "해설 포함", "해설은 PDF 마지막 페이지에 따로 모음", !hasQuestions || !options.questions],
+    ["notes", "메모", hasNotes ? "AI 메모와 이어진 질문" : "메모가 없으면 빈 섹션은 생략"],
+    ["comments", "AI 댓글", hasComments ? "댓글 스레드와 답글" : "AI 댓글이 없으면 빈 섹션은 생략"]
+  ];
+  return `
+    <div class="modal-backdrop show" id="exportBackdrop"></div>
+    <section class="export-panel show">
+      <div class="drawer-head"><b>내보내기</b><button class="btn small ghost" id="closeExportPanel">닫기</button></div>
+      <div class="export-body">
+        <div class="export-format-row">
+          <button class="export-format-card pdf ${state.exportType === "pdf" ? "active" : ""}" data-export-type="pdf">
+            <b>PDF로 내보내기</b><span>A4 인쇄용 레이아웃 · 추천</span>
+          </button>
+          <button class="export-format-card ${state.exportType === "markdown" ? "active" : ""}" data-export-type="markdown">
+            <b>Markdown</b><span>공유·AI 어시스트용 컨텍스트</span>
+          </button>
+          <button class="export-format-card ${state.exportType === "text" ? "active" : ""}" data-export-type="text">
+            <b>텍스트</b><span>가벼운 복사·보관용</span>
+          </button>
+        </div>
+        <div class="export-option-grid">
+          ${optionRows.map(([key, label, desc, disabled]) => `
+            <label class="export-option ${disabled ? "disabled" : ""}">
+              <input type="checkbox" data-export-option="${escapeHtml(key)}" ${options[key] ? "checked" : ""} ${disabled ? "disabled" : ""} />
+              <span><b>${escapeHtml(label)}</b><em>${escapeHtml(desc)}</em></span>
+            </label>`).join("")}
+        </div>
+        <div class="export-note">
+          PDF는 새 인쇄 창을 열어 브라우저의 <b>PDF로 저장</b> 기능을 사용합니다. 배경 그래픽이 보이지 않으면 인쇄 설정에서 배경 그래픽을 켜 주세요.
+        </div>
+        <div class="export-actions">
+          <button class="btn ghost" id="cancelExportBtn">취소</button>
+          <button class="btn primary export-main-btn" id="runExportBtn">${escapeHtml(EXPORT_TYPE_LABELS[state.exportType] || "PDF")} 내보내기</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+function attachExportEvents() {
+  document.querySelector("#closeExportPanel")?.addEventListener("click", () => { state.exportOpen = false; render(); });
+  document.querySelector("#cancelExportBtn")?.addEventListener("click", () => { state.exportOpen = false; render(); });
+  document.querySelector("#exportBackdrop")?.addEventListener("click", () => { state.exportOpen = false; render(); });
+  document.querySelectorAll("[data-export-type]").forEach((el) => el.addEventListener("click", () => {
+    state.exportType = el.dataset.exportType || "pdf";
+    render();
+  }));
+  document.querySelectorAll("[data-export-option]").forEach((el) => el.addEventListener("change", () => {
+    const key = el.dataset.exportOption;
+    state.exportOptions = { ...createDefaultExportOptions(), ...(state.exportOptions || {}), [key]: el.checked };
+    if (key === "passage" && !el.checked) state.exportOptions.passageHighlights = false;
+    if (key === "questions" && !el.checked) state.exportOptions.includeSolutions = false;
+    render();
+  }));
+  document.querySelector("#runExportBtn")?.addEventListener("click", runExport);
+}
+
+function runExport() {
+  if (!state.analysis) return notify("info", "내보낼 분석이 없습니다", "먼저 지문 분석을 완료해 주세요.");
+  const options = getExportOptions();
+  const filenameBase = makeExportFileBaseName();
+  try {
+    if (state.exportType === "markdown") {
+      downloadTextFile(`${filenameBase}.md`, buildMarkdownExport(options), "text/markdown;charset=utf-8");
+      notify("success", "Markdown 내보내기 완료", "공유용 마크다운 파일을 다운로드했습니다.");
+      state.exportOpen = false;
+      render();
+    } else if (state.exportType === "text") {
+      downloadTextFile(`${filenameBase}.txt`, buildTextExport(options), "text/plain;charset=utf-8");
+      notify("success", "텍스트 내보내기 완료", "TXT 파일을 다운로드했습니다.");
+      state.exportOpen = false;
+      render();
+    } else {
+      state.exportOpen = false;
+      render();
+      openPdfPrintWindow(options, `${filenameBase}.html`);
+      notify("info", "PDF 인쇄 화면을 준비했습니다", "인쇄 대상에서 'PDF로 저장'을 선택해 주세요. 팝업 없이 현재 탭에서 인쇄 대화상자를 엽니다.");
+    }
+  } catch (error) {
+    notify("error", "내보내기 실패", error.message || "내보내기 중 오류가 발생했습니다.", error.stack || String(error));
+  }
+}
+
+function makeExportFileBaseName() {
+  const title = String(state.analysis?.title || "반짝국어_분석").replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, "_").slice(0, 42) || "반짝국어_분석";
+  const date = new Date().toISOString().slice(0, 10);
+  return `${title}_${date}`;
+}
+
+function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function openPdfPrintWindow(options, fallbackFilename = "반짝국어_분석.html") {
+  const html = buildPdfHtml(options);
+  const frame = document.createElement("iframe");
+  frame.title = "반짝국어 PDF 인쇄";
+  frame.setAttribute("aria-hidden", "true");
+  Object.assign(frame.style, {
+    position: "fixed",
+    right: "0",
+    bottom: "0",
+    width: "0",
+    height: "0",
+    border: "0",
+    opacity: "0",
+    pointerEvents: "none"
+  });
+
+  let printed = false;
+  const cleanup = () => window.setTimeout(() => frame.remove(), 1800);
+  const printFrame = () => {
+    if (printed) return;
+    printed = true;
+    try {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+      cleanup();
+    } catch (error) {
+      frame.remove();
+      openPdfFallbackWindow(html, fallbackFilename, error);
+    }
+  };
+
+  try {
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument || frame.contentWindow?.document;
+    if (!doc) throw new Error("인쇄 프레임을 만들 수 없습니다.");
+    doc.open();
+    doc.write(html);
+    doc.close();
+    frame.addEventListener("load", () => window.setTimeout(printFrame, 250), { once: true });
+    window.setTimeout(printFrame, 900);
+  } catch (error) {
+    frame.remove();
+    openPdfFallbackWindow(html, fallbackFilename, error);
+  }
+}
+
+function openPdfFallbackWindow(html, fallbackFilename, originalError) {
+  const win = window.open("", "_blank", "width=980,height=1200");
+  if (!win) {
+    downloadTextFile(fallbackFilename, html, "text/html;charset=utf-8");
+    throw new Error(`브라우저가 인쇄 창을 막아 HTML 파일로 저장했습니다. 다운로드된 파일을 열고 Ctrl+P로 PDF 저장을 선택해 주세요. (${originalError?.message || "팝업 차단"})`);
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  win.addEventListener("load", () => window.setTimeout(() => win.print(), 500), { once: true });
+}
+
+function buildPdfHtml(options) {
+  const title = state.analysis?.title || "반짝국어 분석";
+  const flowSections = [];
+  if (options.summary) flowSections.push(renderExportSummaryHtml());
+  if (options.structure) flowSections.push(renderExportStructureHtml());
+  if (options.concepts) flowSections.push(renderExportConceptsHtml());
+  if (options.notes) flowSections.push(renderExportNotesHtml());
+  if (options.comments) flowSections.push(renderExportCommentsHtml());
+
+  const sections = [];
+  sections.push(renderExportCoverHtml());
+  if (options.passage) sections.push(renderExportPassageHtml(options));
+  if (flowSections.length) sections.push(`<main class="export-flow-page">${flowSections.join("\n")}</main>`);
+  if (options.questions && state.questions) sections.push(renderExportQuestionsHtml(false));
+  if (options.questions && options.includeSolutions && state.questions) sections.push(renderExportQuestionsHtml(true));
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${buildPdfStyles()}</style></head><body>${sections.join("\n")}<script>window.addEventListener('afterprint',()=>{});<\/script></body></html>`;
+}
+
+function buildPdfStyles() {
+  return `
+    @page { size: A4; margin: 18mm 11mm 15mm; @bottom-center { content: counter(page); color: #8b95aa; font-size: 8pt; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #172033; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; background: linear-gradient(135deg, #f8fbff 0%, #f5f3ff 45%, #eefcff 100%); font-size: 10pt; line-height: 1.5; }
+    .export-page, .export-flow-page { position: relative; padding: 12mm 9mm 13mm; box-decoration-break: clone; -webkit-box-decoration-break: clone; background: linear-gradient(135deg, rgba(255,255,255,.97), rgba(246,250,255,.95)); border: 1px solid rgba(124, 137, 171, .16); overflow: visible; }
+    .export-page::before, .export-flow-page::before { content: ""; position: absolute; inset: -26mm auto auto -30mm; width: 80mm; height: 80mm; border-radius: 999px; background: radial-gradient(circle, rgba(129,140,248,.12), transparent 65%); pointer-events: none; }
+    .cover, .passage-page, .question-page, .solution-page { min-height: 255mm; break-after: page; page-break-after: always; }
+    .export-flow-page { min-height: 255mm; break-after: page; page-break-after: always; }
+    .cover { display:flex; flex-direction:column; justify-content:center; }
+    .cover h1 { font-size: 24pt; line-height: 1.18; margin: 0 0 7px; letter-spacing: -.05em; }
+    .cover .brand { display:inline-flex; width:max-content; padding:4px 9px; border-radius:999px; color:#4f46e5; border:1px solid rgba(79,70,229,.18); background:rgba(255,255,255,.72); font-size: 9pt; }
+    .cover p { max-width: 150mm; color:#4b5870; font-size: 10pt; line-height:1.7; }
+    .meta-grid { display:grid; grid-template-columns: repeat(3,1fr); gap: 6mm; margin-top: 10mm; }
+    .meta, .card { border:1px solid rgba(118,129,152,.18); background:rgba(255,255,255,.78); border-radius:10px; padding:5mm; box-shadow: 0 5px 18px rgba(41,53,87,.05); break-inside: avoid; page-break-inside: avoid; }
+    .meta b, .meta span { display:block; }
+    .meta b { color:#64708a; font-size:8pt; }
+    .section-title { display:flex; justify-content:space-between; align-items:end; gap:8px; border-bottom: 1px solid rgba(99,102,241,.2); margin: 0 0 5mm; padding-bottom:2mm; break-after: avoid; page-break-after: avoid; }
+    .section-title h2 { margin:0; font-size: 15pt; letter-spacing:-.04em; }
+    .section-title span { color:#7b8498; font-size:8pt; }
+    .export-section-block { position:relative; z-index:1; margin: 0 0 7mm; break-inside: auto; }
+    .export-section-block .card { margin: 0 0 4mm; padding: 4mm; }
+    .card h3 { margin: 0 0 2mm; font-size: 11pt; }
+    .card h4 { margin: 0 0 1.5mm; font-size: 10pt; }
+    p { margin: 0 0 2mm; }
+    small { color:#68758d; font-size:8pt; }
+    .grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:4mm; }
+    .flow { display:flex; flex-wrap:wrap; gap:2mm; align-items:center; }
+    .pill, .badge { display:inline-flex; border-radius:999px; padding:1.2mm 2.2mm; background:rgba(99,102,241,.08); color:#4f46e5; font-size:8pt; font-weight:700; margin-right:1mm; }
+    .arrow { color:#a7afbf; margin:0 1mm; }
+    .passage-page .section-title { margin-bottom: 4mm; }
+    .export-passage-stack { position:relative; z-index:1; display:block; }
+    .export-passage-block { margin: 0 0 5mm; break-inside: auto; page-break-inside: auto; }
+    .passage-text { font-size: 10.3pt; line-height: 1.78; background:rgba(255,255,255,.86); border-radius:10px; padding:3.5mm 4mm; border:1px solid rgba(118,129,152,.14); margin:0 0 2.2mm; }
+    .passage-para { margin: 0; break-inside: auto; page-break-inside: auto; }
+    .passage-text mark { border-radius:4px; padding:0 .55mm; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+    .passage-note-grid { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:1.8mm; align-items:start; margin:0 0 2mm; }
+    .passage-note-grid.empty { display:block; }
+    mark.claim, .margin-note.claim em { background:#fff3a3; }
+    mark.evidence, .margin-note.evidence em { background:#c8f7dc; }
+    mark.contrast, .margin-note.contrast em { background:#d9d2ff; }
+    mark.definition, .margin-note.definition em { background:#cbe7ff; }
+    mark.example, .margin-note.example em { background:#ffd9b3; }
+    mark.warning, .margin-note.warning em { background:#ffd0d0; }
+    mark.support, .margin-note.support em { background:#e8ecf4; }
+    .margin-note { font-size:7.2pt; line-height:1.22; border:1px solid rgba(118,129,152,.17); border-radius:7px; background:rgba(255,255,255,.78); padding:1.55mm; margin:0; break-inside: avoid; page-break-inside: avoid; }
+    .margin-note em { display:inline; font-style:normal; font-weight:800; color:#38425a; border-radius:4px; padding:.22mm .8mm; }
+    .margin-note b { display:block; margin:.8mm 0 .55mm; color:#1f2a44; font-size:7.45pt; }
+    .question-page, .solution-page { padding-top: 10mm; }
+    .question-item { border:1px solid rgba(118,129,152,.16); background:rgba(255,255,255,.82); border-radius:10px; padding:4mm; margin-bottom:4mm; break-inside: avoid; page-break-inside: avoid; }
+    .choice { margin-left: 5mm; }
+    .solution-list { margin: 0; padding: 0; }
+    .solution-line { list-style:none; border-bottom:1px solid rgba(118,129,152,.18); padding:2.4mm 0; margin:0; break-inside: avoid; page-break-inside: avoid; }
+    .solution-line h3 { display:inline; margin:0; font-size:9.8pt; }
+    .solution-line p { margin:1mm 0 0; }
+    .memo-export-item { border:1px solid rgba(118,129,152,.16); background:rgba(255,255,255,.82); border-radius:10px; padding:4mm; margin-bottom:4mm; break-inside: avoid; page-break-inside: avoid; }
+    .memo-head { display:flex; align-items:center; justify-content:space-between; gap:4mm; margin-bottom:2.5mm; }
+    .memo-source { color:#65718b; font-size:8pt; max-width: 105mm; text-align:right; }
+    .memo-question { background:rgba(99,102,241,.08); border-radius:8px; padding:2.5mm 3mm; margin:0 0 3mm; font-size:11pt; }
+    .memo-answer { font-size:10pt; line-height:1.65; }
+    .memo-emphasis { color:#4f46e5; font-weight:800; background:rgba(99,102,241,.11); border-radius:4px; padding:0 .7mm; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+    .comment { border-left:3px solid rgba(99,102,241,.32); padding:2mm 0 2mm 3mm; margin:2mm 0; break-inside: avoid; }
+    .muted { color:#68758d; }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .export-page, .export-flow-page { border:0; } }
+  `;
+}
+
+function renderExportCoverHtml() {
+  const a = state.analysis || {};
+  const score = a.difficulty?.score ? String(a.difficulty.score).replace(/\.0$/, "") : "";
+  return `<section class="export-page cover"><div class="brand">반짝국어 분석 리포트</div><h1>${escapeHtml(a.title || "국어 지문 분석")}</h1><p>${escapeHtml(a.overallSummary || "분석 요약이 없습니다.")}</p><div class="meta-grid"><div class="meta"><b>분야</b><span>${escapeHtml(a.field || "-")}</span></div><div class="meta"><b>난이도</b><span>${escapeHtml(a.difficulty?.level || "-")} ${score ? `· ${score}/5` : ""}</span></div><div class="meta"><b>내보내기</b><span>PDF 학습 자료</span></div></div></section>`;
+}
+
+function exportBlock(title, subtitle, body, cls = "") {
+  return `<section class="export-section-block ${cls}"><div class="section-title"><h2>${escapeHtml(title)}</h2><span>${escapeHtml(subtitle || "")}</span></div>${body}</section>`;
+}
+
+function exportPage(title, subtitle, body, cls = "") {
+  return `<section class="export-page ${cls}"><div class="section-title"><h2>${escapeHtml(title)}</h2><span>${escapeHtml(subtitle || "")}</span></div>${body}</section>`;
+}
+
+function getPassageParagraphs() {
+  const source = String(state.passage || state.analysis?.cleanedPassage || "").trim();
+  if (!source) return [];
+  return source.split(/\n\s*\n/g).map((text, i) => ({ id: state.analysis?.paragraphs?.[i]?.id || `p${i + 1}`, index: i + 1, text: text.trim() })).filter((p) => p.text);
+}
+
+function renderExportPassageHtml(options) {
+  const paragraphs = getPassageParagraphs();
+  const highlights = options.passageHighlights ? ensureArray(state.analysis?.highlights) : [];
+  if (!paragraphs.length) return exportPage("본문", "본문만", `<div class="card">본문이 없습니다.</div>`, "passage-page");
+  const blocks = paragraphs.map((p) => {
+    const related = highlights.filter((h) => h.paragraphId === p.id || p.text.includes(h.text));
+    const noteHtml = related.length
+      ? related.slice(0, 16).map(renderMarginNoteHtml).join("")
+      : options.passageHighlights
+        ? `<div class="margin-note support"><em>주석 없음</em><b>${p.index}문단</b>이 문단에 연결된 형광펜 설명이 없습니다.</div>`
+        : "";
+    return `<section class="export-passage-block"><article class="passage-text"><p class="passage-para"><span class="badge">${p.index}문단</span>${highlightTextForExport(p.text, related)}</p></article>${options.passageHighlights ? `<div class="passage-note-grid ${related.length ? "" : "empty"}">${noteHtml}</div>` : ""}</section>`;
+  }).join("");
+  const body = `<div class="export-passage-stack">${blocks}</div>`;
+  return exportPage("본문", options.passageHighlights ? "문단별 본문·형광펜 주석" : "본문만", body, "passage-page");
+}
+
+function renderMarginNoteHtml(h) {
+  return `<div class="margin-note ${escapeHtml(h.color || "claim")}"><em>${escapeHtml(HIGHLIGHT_LABELS[h.color] || h.type || "핵심")}</em><b>${escapeHtml(h.text || "")}</b>${escapeHtml(h.detail || h.shortReason || "")}</div>`;
+}
+
+function highlightTextForExport(text, highlights) {
+  let html = escapeHtml(text);
+  const sorted = ensureArray(highlights).filter((h) => h.text).sort((a, b) => String(b.text).length - String(a.text).length).slice(0, 28);
+  for (const h of sorted) {
+    const needle = escapeHtml(h.text);
+    if (!needle || !html.includes(needle)) continue;
+    html = html.replace(needle, `<mark class="${escapeHtml(h.color || "claim")}">${needle}</mark>`);
+  }
+  return html.replaceAll("\n", "<br>");
+}
+
+function renderExportSummaryHtml() {
+  const a = state.analysis || {};
+  const criteria = ensureArray(a.difficulty?.criteria);
+  const body = `<div class="card"><h3>${escapeHtml(a.title || "제목 없음")}</h3><p>${escapeHtml(a.overallSummary || "")}</p></div><div class="card"><h3>읽는 법</h3><p>${escapeHtml(a.readingGuide || "")}</p></div><div class="grid">${criteria.map((c) => `<div class="card"><h4>${escapeHtml(c.name)}</h4><p><b>${escapeHtml(String(c.score || "-"))}/5</b> ${escapeHtml(c.reason || "")}</p></div>`).join("")}</div><div class="card"><h3>문단별 요약</h3>${ensureArray(a.paragraphs).map((p) => `<p><span class="pill">${escapeHtml(String(p.index || ""))}문단 · ${escapeHtml(p.role || "")}</span> ${escapeHtml(p.summary || "")}</p>`).join("")}</div>`;
+  return exportBlock("요약", "제목·난이도·문단 요약", body);
+}
+
+function renderExportStructureHtml() {
+  const a = state.analysis || {};
+  const body = `<div class="card"><h3>전개 흐름</h3><div class="flow">${ensureArray(a.flow).map((f, i, arr) => `<span class="pill">${escapeHtml(f)}</span>${i < arr.length - 1 ? `<span class="arrow">→</span>` : ""}`).join("")}</div></div><div class="card"><h3>구조 타임라인</h3>${ensureArray(a.structureTimeline).map((t, i) => `<p><span class="pill">${i + 1}</span><b>${escapeHtml(t.label || "")}</b> ${escapeHtml(t.description || "")}</p>`).join("")}</div><div class="card"><h3>비교·대조</h3>${ensureArray(a.comparisons).map((c) => `<p><b>${escapeHtml(c.axis || "비교")}</b> · ${escapeHtml(c.a || "A")} ↔ ${escapeHtml(c.b || "B")}<br>${escapeHtml(c.meaning || "")} ${c.sourceDetail ? `<br><small>${escapeHtml(c.sourceDetail)}</small>` : ""}</p>`).join("") || `<p>비교·대조 항목이 없습니다.</p>`}</div>`;
+  return exportBlock("구조", "흐름·타임라인·비교 대조", body);
+}
+
+function renderExportConceptsHtml() {
+  const a = state.analysis || {};
+  const body = `<div class="card"><h3>개념 사전</h3>${ensureArray(a.glossary).map((g) => `<p><b>${escapeHtml(g.term || "개념")}</b> - ${escapeHtml(g.meaning || "")}<br><small>지문 속 의미: ${escapeHtml(g.inTextMeaning || "")} ${g.sourceText ? `· ${escapeHtml(g.sourceText)}` : ""}</small></p>`).join("") || `<p>개념 항목이 없습니다.</p>`}</div><div class="card"><h3>헷갈리는 문장</h3>${ensureArray(a.trickySentences).map((t) => `<p><b>${escapeHtml(t.sentence || "")}</b><br>${escapeHtml(t.easyRewrite || "")}<br><small>${escapeHtml(t.testPoint || "")}</small></p>`).join("") || `<p>헷갈리는 문장 항목이 없습니다.</p>`}</div>`;
+  return exportBlock("개념", "개념 사전·헷갈리는 문장", body);
+}
+
+function renderExportQuestionsHtml(answersOnly = false) {
+  const q = state.questions || {};
+  const title = answersOnly ? "문제 해설" : "문제";
+  if (answersOnly) {
+    const body = `<ol class="solution-list">${[
+      ...ensureArray(q.multipleChoice).map((item, i) => `<li class="solution-line"><h3>5지선다 ${i + 1}</h3><p><b>정답</b> ${normalizeChoiceNumber(item.answer)} · ${escapeHtml(item.finalExplanation || "")}</p><p><small>출제 의도: ${escapeHtml(item.sourceIntent || "")}</small></p></li>`),
+      ...ensureArray(q.ox).map((item, i) => `<li class="solution-line"><h3>OX ${i + 1}</h3><p><b>정오</b> ${escapeHtml(item.answer || "")} · ${escapeHtml(item.explanation || "")}</p><p><small>함정: ${escapeHtml(item.trap || "")}</small></p></li>`),
+      ...ensureArray(q.shortAnswer).map((item, i) => `<li class="solution-line"><h3>서술형 ${i + 1}</h3><p><b>모범 답안</b> ${escapeHtml(item.idealAnswer || "")}</p><p><small>출제 의도: ${escapeHtml(item.type || "")}</small></p><p><small>채점 요소: ${ensureArray(item.gradingPoints).map(escapeHtml).join(" · ")}</small></p></li>`)
+    ].join("")}</ol>` || `<div class="card">해설이 없습니다.</div>`;
+    return exportPage(title, "정답·출제 의도·해설", body, "solution-page");
+  }
+  const body = [
+    ...ensureArray(q.multipleChoice).map((item, i) => `<div class="question-item"><h3>5지선다 ${i + 1}. ${escapeHtml(item.question || "")}</h3>${ensureArray(item.choices).map((c) => `<p class="choice">${normalizeChoiceNumber(c.number)} ${escapeHtml(c.text || "")}</p>`).join("")}</div>`),
+    ...ensureArray(q.ox).map((item, i) => `<div class="question-item"><h3>OX ${i + 1}. ${escapeHtml(item.statement || "")}</h3><p class="muted">O / X</p></div>`),
+    ...ensureArray(q.shortAnswer).map((item, i) => `<div class="question-item"><h3>서술형 ${i + 1}. ${escapeHtml(item.question || "")}</h3><p class="muted">답안:</p></div>`)
+  ].join("") || `<div class="card">문제가 없습니다.</div>`;
+  return exportPage(title, "문항만", body, "question-page");
+}
+
+
+function formatExportMemoText(value = "") {
+  const raw = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/^```(?:markdown|md|text)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  if (!raw) return "";
+  return raw
+    .split(/\n{2,}/g)
+    .map((block) => escapeHtml(block.replace(/\n/g, " ").replace(/\s+/g, " ").trim())
+      .replace(/\*\*([^*]{1,280})\*\*/g, '<strong class="memo-inline-mark">$1</strong>')
+      .replace(/__([^_]{1,280})__/g, '<strong class="memo-inline-mark">$1</strong>')
+      .replace(/`([^`]{1,160})`/g, '<code>$1</code>'))
+    .filter(Boolean)
+    .join("<br>");
+}
+
+function renderExportNotesHtml() {
+  const notes = ensureArray(state.notes);
+  const body = notes.length ? notes.map((n) => {
+    const question = n.question || "메모";
+    const selected = n.selectedText || n.sourcePointer || "지문 전체 질문";
+    const answer = n.explanation?.simple || n.explanation?.answer || n.answer || "";
+    const threadHtml = ensureArray(n.thread).map((t) => `<p><b>추가 질문</b> ${escapeHtml(t.question || "")}<br>${formatExportMemoText(t.answer || "")}</p>`).join("");
+    return `<div class="memo-export-item"><div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt || Date.now()).toLocaleString())}</span><span class="memo-source">${escapeHtml(shorten(selected, 96))}</span></div><h3 class="memo-question">Q. ${escapeHtml(question)}</h3><p class="memo-answer">${formatExportMemoText(answer)}</p>${threadHtml}</div>`;
+  }).join("") : `<div class="card">저장된 메모가 없습니다.</div>`;
+  return exportBlock("메모", "선택 구절 설명·추가 질문", body);
+}
+
+function renderExportCommentsHtml() {
+  const threads = ensureArray(state.botChatThreads);
+  const body = threads.length ? threads.map((t) => `<div class="card"><h3>Q. ${escapeHtml(t.question || "")}</h3>${ensureArray(t.comments).map((c) => `<div class="comment"><b>${escapeHtml(c.author || "익명")}</b> <small>${escapeHtml(c.timeLabel || "방금 전")}</small><p>${escapeHtml(c.text || "")}</p>${ensureArray(c.sideReplies).map((r) => `<p class="muted">↳ ${escapeHtml(r.author || "익명")}: ${escapeHtml(r.text || "")}</p>`).join("")}</div>`).join("")}</div>`).join("") : `<div class="card">AI 댓글 스레드가 없습니다.</div>`;
+  return exportBlock("AI 댓글", "질문 스레드·답글", body);
+}
+
+
+function buildMarkdownExport(options) {
+  const a = state.analysis || {};
+  const parts = [`# ${mdEscape(a.title || "반짝국어 분석")}`, ``, `> 반짝국어 공유용 마크다운입니다. 다른 AI 어시스트가 문맥을 잃지 않도록 원문, 분석 요약, 구조, 개념, 문제, 메모, AI 댓글을 선택한 범위만큼 포함합니다.`, ``, `- 분야: ${mdEscape(a.field || "")}`, `- 난이도: ${mdEscape(a.difficulty?.level || "")} ${mdEscape(a.difficulty?.score ?? "")}/5`, `- 생성일: ${new Date().toLocaleString()}`];
+  if (options.passage) parts.push(`\n## 본문\n\n${mdEscape(state.passage || a.cleanedPassage || "")}`);
+  if (options.summary) parts.push(`\n## 요약\n\n${mdEscape(a.overallSummary || "")}\n\n### 읽는 법\n${mdEscape(a.readingGuide || "")}\n\n### 문단별 요약\n${ensureArray(a.paragraphs).map((p) => `- ${p.index}문단(${mdEscape(p.role)}): ${mdEscape(p.summary)} / 핵심: ${mdEscape(p.coreClaim)}`).join("\n")}`);
+  if (options.structure) parts.push(`\n## 구조\n\n### 흐름\n${bulletLines(a.flow)}\n\n### 구조 타임라인\n${ensureArray(a.structureTimeline).map((t) => `- ${mdEscape(t.label)}: ${mdEscape(t.description)}`).join("\n")}\n\n### 비교·대조\n${ensureArray(a.comparisons).map((c) => `- ${mdEscape(c.axis)}: ${mdEscape(c.a)} ↔ ${mdEscape(c.b)} - ${mdEscape(c.meaning)} (${mdEscape(c.sourceDetail)})`).join("\n")}`);
+  if (options.concepts) parts.push(`\n## 개념\n\n${ensureArray(a.glossary).map((g) => `### ${mdEscape(g.term)}\n- 뜻: ${mdEscape(g.meaning)}\n- 지문 속 의미: ${mdEscape(g.inTextMeaning)}\n- 출처: ${mdEscape(g.sourceText)}`).join("\n\n")}\n\n## 헷갈리는 문장\n${ensureArray(a.trickySentences).map((t) => `- ${mdEscape(t.sentence)}\n  - 쉽게: ${mdEscape(t.easyRewrite)}\n  - 포인트: ${mdEscape(t.testPoint)}`).join("\n")}`);
+  if (options.questions && state.questions) parts.push(buildQuestionsMarkdown(options.includeSolutions));
+  if (options.notes) parts.push(`\n## 메모\n\n${ensureArray(state.notes).map((n) => `### ${mdEscape(n.question || n.selectedText || "메모")}\n${mdEscape(n.explanation?.simple || n.answer || "")}\n${ensureArray(n.thread).map((m) => `- Q. ${mdEscape(m.question)}\n  A. ${mdEscape(m.answer)}`).join("\n")}`).join("\n\n")}`);
+  if (options.comments) parts.push(`\n## AI 댓글\n\n${ensureArray(state.botChatThreads).map((t) => `### Q. ${mdEscape(t.question)}\n${ensureArray(t.comments).map(commentToMarkdown).join("\n")}`).join("\n\n")}`);
+  return parts.join("\n").replace(/\n{4,}/g, "\n\n\n");
+}
+
+function buildQuestionsMarkdown(includeSolutions) {
+  const q = state.questions || {};
+  const parts = [`\n## 문제`];
+  ensureArray(q.multipleChoice).forEach((item, i) => { parts.push(`\n### 5지선다 ${i + 1}\n${mdEscape(item.question)}\n${ensureArray(item.choices).map((c) => `${normalizeChoiceNumber(c.number)} ${mdEscape(c.text)}`).join("\n")}`); if (includeSolutions) parts.push(`정답: ${normalizeChoiceNumber(item.answer)}\n출제 의도: ${mdEscape(item.sourceIntent)}\n해설: ${mdEscape(item.finalExplanation)}`); });
+  ensureArray(q.ox).forEach((item, i) => { parts.push(`\n### OX ${i + 1}\n${mdEscape(item.statement)}`); if (includeSolutions) parts.push(`정오: ${mdEscape(item.answer)}\n출제 의도: ${mdEscape(item.trap)}\n해설: ${mdEscape(item.explanation)}`); });
+  ensureArray(q.shortAnswer).forEach((item, i) => { parts.push(`\n### 서술형 ${i + 1}\n${mdEscape(item.question)}`); if (includeSolutions) parts.push(`출제 의도: ${mdEscape(item.type)}\n모범 답안: ${mdEscape(item.idealAnswer)}\n채점 요소:\n${bulletLines(item.gradingPoints)}`); });
+  return parts.join("\n");
+}
+
+function commentToMarkdown(c) {
+  const side = ensureArray(c.sideReplies).map((r) => `  - ↳ ${mdEscape(r.author)}: ${mdEscape(r.text)}`).join("\n");
+  const replies = ensureArray(c.replyThreads).map((rt) => `  - 나: ${mdEscape(rt.question)}\n${ensureArray(rt.comments).map((rc) => `    - ${mdEscape(rc.author)}: ${mdEscape(rc.text)}`).join("\n")}`).join("\n");
+  return `- ${mdEscape(c.author || "익명")}(${mdEscape(c.timeLabel || "방금 전")}): ${mdEscape(c.text || "")}\n${[side, replies].filter(Boolean).join("\n")}`;
+}
+
+function buildTextExport(options) {
+  return buildMarkdownExport(options).replace(/^#+\s*/gm, "").replace(/[*_`>#]/g, "").replace(/\n{3,}/g, "\n\n");
+}
+
 function renderLogPanel() {
   if (!state.logOpen) return "";
   return `
@@ -1337,6 +2001,7 @@ function attachAppEvents() {
     state.notes = [];
     state.detail = null;
     state.sideMenu = false;
+    state.exportOpen = false;
     state.sampleActive = false;
     state.userWorkspaceSnapshot = null;
     render();
@@ -1350,6 +2015,7 @@ function attachAppEvents() {
     state.questions = null;
     state.notes = [];
     state.detail = null;
+    state.exportOpen = false;
     state.selectedText = "";
     state.tab = "summary";
     state.questionTab = "mc";
@@ -1429,8 +2095,44 @@ function attachAppEvents() {
     render();
   });
   document.querySelector("#saveBtn")?.addEventListener("click", saveCurrentRecord);
+  document.querySelector("#exportBtn")?.addEventListener("click", () => {
+    if (!state.analysis) return notify("info", "내보낼 분석이 없습니다", "먼저 지문 분석을 완료해 주세요.");
+    state.exportOptions = { ...createDefaultExportOptions(), ...(state.exportOptions || {}) };
+    state.exportOpen = true;
+    render();
+  });
+  attachExportEvents();
   document.querySelector("#analyzeBtn")?.addEventListener("click", runAnalysis);
   document.querySelector("#questionBtn")?.addEventListener("click", runQuestionGeneration);
+  document.querySelectorAll("[data-question-setting]").forEach((el) => el.addEventListener("click", () => {
+    if (el.disabled) return;
+    setQuestionSettings({ [el.dataset.questionSetting]: el.dataset.value });
+    render();
+  }));
+  document.querySelector("#singlePassQuestions")?.addEventListener("change", (e) => {
+    const next = normalizeQuestionSettings({ ...state.questionSettings, singlePass: e.target.checked });
+    state.questionSettings = next;
+    persistSettings();
+    render();
+  });
+  document.querySelector(".advanced-question-box")?.addEventListener("toggle", (e) => {
+    state.questionSettings = normalizeQuestionSettings({ ...state.questionSettings, advancedOpen: e.target.open });
+    persistSettings();
+  });
+  document.querySelectorAll("[data-question-count]").forEach((el) => el.addEventListener("input", () => {
+    setQuestionNestedSetting("counts", el.dataset.questionCount, Number(el.value));
+    render();
+  }));
+  document.querySelectorAll("[data-question-length]").forEach((el) => el.addEventListener("input", () => {
+    setQuestionNestedSetting("lengths", el.dataset.questionLength, Number(el.value));
+    render();
+  }));
+  document.querySelectorAll("[data-question-difficulty]").forEach((el) => el.addEventListener("input", () => {
+    const v = Number(el.value);
+    const diff = v <= 1 ? "low" : v >= 3 ? "high" : "medium";
+    setQuestionNestedSetting("typeDifficulties", el.dataset.questionDifficulty, diff);
+    render();
+  }));
   document.querySelector("#passageInput")?.addEventListener("input", debounce((e) => { state.passage = e.target.value; state.sampleActive = false; }, 80));
   document.querySelector("#ocrCleanBtn")?.addEventListener("click", () => {
     const input = document.querySelector("#passageInput");
@@ -1507,7 +2209,7 @@ function attachAppEvents() {
   document.querySelectorAll("[data-jump-sentence]").forEach((el) => el.addEventListener("click", () => flashSource(el.dataset.jumpSentence, el.dataset.jump)));
   document.querySelectorAll("[data-flash-text]").forEach((el) => el.addEventListener("click", () => flashSource(el.dataset.flashText, el.dataset.jump)));
   document.querySelectorAll("[data-load-record]").forEach((el) => el.addEventListener("click", () => loadRecord(el.dataset.loadRecord)));
-  document.querySelectorAll("[data-del-record]").forEach((el) => el.addEventListener("click", () => { state.records = deleteRecord(el.dataset.delRecord); render(); }));
+  document.querySelectorAll("[data-del-record]").forEach((el) => el.addEventListener("click", () => deleteSavedRecord(el.dataset.delRecord)));
   document.querySelector("#botChatInput")?.addEventListener("input", debounce((e) => { state.botChatInput = e.target.value; }, 80));
   document.querySelector("#botChatAskBtn")?.addEventListener("click", () => runBotChatAsk());
   document.querySelectorAll("[data-open-bot-reply]").forEach((el) => el.addEventListener("click", () => { const key = el.dataset.openBotReply; state.botReplyOpen[key] = !state.botReplyOpen[key]; render(); }));
@@ -1516,6 +2218,7 @@ function attachAppEvents() {
   document.querySelector("#closeDrawer")?.addEventListener("click", () => { state.detail = null; render(); });
   document.querySelector("#readerMemoQuestion")?.addEventListener("input", debounce((e) => { state.memoAskInput = e.target.value; }, 80));
   document.querySelector("#readerMemoAskBtn")?.addEventListener("click", () => runReaderMemoAsk());
+  document.querySelector("#toggleReaderAskBtn")?.addEventListener("click", () => { state.readerAskCollapsed = !state.readerAskCollapsed; render(); });
   document.querySelectorAll("[data-reader-quick]").forEach((el) => el.addEventListener("click", () => runReaderMemoAsk(el.dataset.readerQuick)));
   document.querySelector("#selectedMemoQuestion")?.addEventListener("input", debounce((e) => { state.selectedMemoInput = e.target.value; }, 80));
   document.querySelector("#selectedMemoAskBtn")?.addEventListener("click", () => runSelectionQuestion());
@@ -1636,6 +2339,7 @@ async function runAnalysis() {
     state.mindPan = { x: 0, y: 0 };
     state.mindZoom = 1;
     state.tab = "summary";
+    state.readerAskCollapsed = false;
   } catch (error) {
     notify("error", "분석 실패", error.message || "알 수 없는 오류가 발생했습니다.", error.stack || String(error));
   } finally {
@@ -1655,27 +2359,73 @@ async function runQuestionGeneration() {
     notify("error", "API 키가 없습니다", "설정 메뉴에서 API 키를 붙여넣고 '키 적용'을 눌러 주세요.", "apiKey is empty and demoMode is off");
     return;
   }
+  const options = getEffectiveQuestionSettings();
+  state.questionPhase = getEffectiveQuestionSettings().singlePass ? "단일 호출" : "1/2 5지선다 제작";
   const timer = startProgress("questions");
   try {
     if (state.demoMode) {
       await delay(700);
-      const demo = createDemoQuestions();
-      const length = state.passage.length;
-      const target = length > 2500 ? 20 : length > 1200 ? 12 : 6;
-      while (demo.ox.length < target) {
+      const demo = normalizeQuestionSet(createDemoQuestions());
+      while (demo.ox.length < options.counts.ox) {
         const i = demo.ox.length + 1;
         demo.ox.push({ id: `ox${i}`, statement: `복습용 진술 ${i}: 지문의 핵심 관점을 한쪽으로 단순화하면 오답이 되기 쉽다.`, answer: i % 2 ? "O" : "X", explanation: "데모 모드 예시입니다. 실제 API 사용 시 지문 기반으로 생성됩니다.", trap: "핵심어만 보고 판단하지 않기" });
       }
+      while (demo.multipleChoice.length < options.counts.multipleChoice) {
+        const i = demo.multipleChoice.length + 1;
+        demo.multipleChoice.push(structuredCloneSafe(demo.multipleChoice[(i - 1) % Math.max(1, demo.multipleChoice.length)] || demo.multipleChoice[0]));
+        demo.multipleChoice[demo.multipleChoice.length - 1].id = `mc${i}`;
+      }
+      while (demo.shortAnswer.length < options.counts.shortAnswer) {
+        const i = demo.shortAnswer.length + 1;
+        demo.shortAnswer.push({ id: `short${i}`, type: "복습형", question: `지문의 핵심 관계를 ${i}번 관점에서 설명하시오.`, idealAnswer: "지문 속 개념 관계를 근거와 함께 설명한다.", gradingPoints: ["핵심 개념 언급", "지문 근거 연결"], sampleWrongAnswer: "핵심어만 나열한 답안" });
+      }
+      demo.multipleChoice = demo.multipleChoice.slice(0, options.counts.multipleChoice);
+      demo.ox = demo.ox.slice(0, options.counts.ox);
+      demo.shortAnswer = demo.shortAnswer.slice(0, options.counts.shortAnswer);
       state.questions = normalizeQuestionSet(demo);
-    } else {
+    } else if (options.singlePass) {
       state.questions = normalizeQuestionSet(await generateQuestions({
         apiKey,
         model: state.useReasoning ? state.reasoningModel : state.model,
         reasoningMode: state.useReasoning,
         reasoningEffort: state.reasoningEffort,
         passage: state.passage,
-        analysis: state.analysis
+        analysis: state.analysis,
+        options
       }));
+    } else {
+      state.questionPhase = "1/2 5지선다 제작";
+      state.loadingProgress = 8;
+      render();
+      updateProgressView();
+      const mcPart = await generateMultipleChoiceQuestions({
+        apiKey,
+        model: state.useReasoning ? state.reasoningModel : state.model,
+        reasoningMode: state.useReasoning,
+        reasoningEffort: state.reasoningEffort,
+        passage: state.passage,
+        analysis: state.analysis,
+        options
+      });
+      state.questionPhase = "2/2 OX·서술형 제작";
+      state.loadingProgress = 8;
+      render();
+      updateProgressView();
+      const restPart = await generateOxShortQuestions({
+        apiKey,
+        model: state.useReasoning ? state.reasoningModel : state.model,
+        reasoningMode: state.useReasoning,
+        reasoningEffort: state.reasoningEffort,
+        passage: state.passage,
+        analysis: state.analysis,
+        options
+      });
+      state.questions = normalizeQuestionSet({
+        multipleChoice: mcPart.multipleChoice || [],
+        ox: restPart.ox || [],
+        shortAnswer: restPart.shortAnswer || [],
+        weaknessGuide: [...ensureArray(mcPart.weaknessGuide), ...ensureArray(restPart.weaknessGuide)].slice(0, 6)
+      });
     }
     resetQuestionState();
     state.tab = "questions";
@@ -1685,6 +2435,7 @@ async function runQuestionGeneration() {
   } finally {
     clearInterval(timer);
     state.loading = null;
+    state.questionPhase = "";
     render();
   }
   });
@@ -2100,10 +2851,25 @@ function findBotComment(comments = [], commentId) {
   return null;
 }
 
-function normalizeBotComments(comments = [], parentId = "") {
+function hashString(value = "") {
+  let hash = 0;
+  for (const ch of String(value || "")) {
+    hash = ((hash << 5) - hash + ch.charCodeAt(0)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function pickBotAvatarId(index = 0, seed = "") {
+  const offset = hashString(seed) % CHAT_PROFILE_COUNT;
+  return ((offset + index) % CHAT_PROFILE_COUNT) + 1;
+}
+
+function normalizeBotComments(comments = [], parentId = "", avatarSeed = "") {
   const fallbackNames = ["문단밀수꾼", "선지비빔밥", "밑줄뒤망령", "오답수거반", "지문옆집사람", "단어가방털이", "국어하다온사람", "개념도둑맞음" ];
+  const seed = `${avatarSeed || "thread"}:${parentId || "root"}`;
   return ensureArray(comments).slice(0, 8).map((c, index) => ({
     id: c?.id || uid("bot"),
+    avatarId: Number(c?.avatarId) || pickBotAvatarId(index, seed),
     author: String(c?.author || fallbackNames[index % fallbackNames.length]).slice(0, 18),
     persona: String(c?.persona || "").slice(0, 24),
     text: shorten(String(c?.text || "음... 이건 지문에서 근거를 먼저 주워 와야겠는데? 일단 문단부터 잡고 가자.").replace(/\s+/g, " "), 340),
@@ -2114,7 +2880,10 @@ function normalizeBotComments(comments = [], parentId = "") {
       text: shorten(String(r?.text || "그 말도 맞는데, 근거는 살짝 더 좁게 봐야 함.").replace(/\s+/g, " "), 160)
     })),
     parentId,
-    replyThreads: ensureArray(c?.replyThreads)
+    replyThreads: ensureArray(c?.replyThreads).map((rt, rtIndex) => ({
+      ...rt,
+      comments: normalizeBotComments(rt?.comments || [], c?.id || parentId, `${seed}:${index}:${rtIndex}`)
+    }))
   }));
 }
 
@@ -2148,7 +2917,7 @@ async function runBotChatAsk(quickQuestion = "") {
         id: uid("thread"),
         question,
         createdAt: Date.now(),
-        comments: normalizeBotComments(result.comments || [])
+        comments: normalizeBotComments(result.comments || [], "", question)
       });
       state.botChatInput = "";
     } catch (error) {
@@ -2189,7 +2958,7 @@ async function runBotReplyAsk(key) {
         });
       }
       parent.replyThreads = ensureArray(parent.replyThreads);
-      parent.replyThreads.push({ id: uid("reply"), question, comments: normalizeBotComments(result.comments || [], parent.id).slice(0, 2) });
+      parent.replyThreads.push({ id: uid("reply"), question, comments: normalizeBotComments(result.comments || [], parent.id, `${threadId}:${commentId}:${question}`).slice(0, 2) });
       state.botReplyInputs[key] = "";
     } catch (error) {
       notify("error", "답글 생성 실패", error.message || "알 수 없는 오류가 발생했습니다.", error.stack || String(error));
@@ -2213,13 +2982,15 @@ function createDemoBotComments(question, replyMode = false) {
   return { comments: base.slice(0, replyMode ? 2 : 4).map((c) => ({ id: uid("bot"), persona: "", sourcePointer: "", ...c })) };
 }
 
-function saveCurrentRecord() {
-  if (!state.analysis) return;
-  const record = {
-    id: uid("analysis"),
-    title: state.analysis.title || "무제 분석",
-    field: state.analysis.field || "",
-    createdAt: Date.now(),
+function createRecordPayload({ id, createdAt, overwrittenFrom = "" } = {}) {
+  const now = Date.now();
+  return {
+    id: id || uid("analysis"),
+    title: state.analysis?.title || "무제 분석",
+    field: state.analysis?.field || "",
+    createdAt: createdAt || now,
+    updatedAt: now,
+    overwrittenFrom,
     passage: state.passage,
     analysis: state.analysis,
     questions: state.questions,
@@ -2230,14 +3001,35 @@ function saveCurrentRecord() {
     qnaMessages: state.qnaMessages,
     botChatThreads: state.botChatThreads
   };
+}
+
+function saveCurrentRecord() {
+  if (!state.analysis) return;
+  const loadedRecord = state.currentRecordId ? state.records.find((r) => r.id === state.currentRecordId) : null;
+  let record;
+
+  if (loadedRecord) {
+    const overwrite = window.confirm(
+      `이 분석은 저장된 노트 '${loadedRecord.title || "무제 분석"}'에서 불러온 내용입니다.\n\n확인: 기존 저장본에 덮어쓰기\n취소: 새 저장본으로 저장`
+    );
+    record = overwrite
+      ? createRecordPayload({ id: loadedRecord.id, createdAt: loadedRecord.createdAt || Date.now() })
+      : createRecordPayload({ overwrittenFrom: loadedRecord.id });
+  } else {
+    record = createRecordPayload();
+  }
+
   state.records = saveRecord(record);
+  state.currentRecordId = record.id;
   state.tab = "saved";
+  notify("success", loadedRecord && record.id === loadedRecord.id ? "저장본 덮어쓰기 완료" : "새 저장본 생성 완료", "현재 분석 내용을 저장했습니다.");
   render();
 }
 
 function loadRecord(id) {
   const record = state.records.find((r) => r.id === id);
   if (!record) return;
+  state.currentRecordId = record.id;
   state.passage = record.passage || "";
   state.analysis = record.analysis ? normalizeAnalysisResult(record.analysis, state.passage) : null;
   state.questions = record.questions ? normalizeQuestionSet(record.questions) : null;
@@ -2248,6 +3040,18 @@ function loadRecord(id) {
   state.qnaMessages = record.qnaMessages || {};
   state.botChatThreads = ensureArray(record.botChatThreads);
   state.tab = "summary";
+  notify("success", "저장본 불러오기 완료", "다시 저장하면 덮어쓰기 또는 새 저장본 저장을 선택할 수 있습니다.");
+  render();
+}
+
+function deleteSavedRecord(id) {
+  const record = state.records.find((r) => r.id === id);
+  if (!record) return;
+  const ok = window.confirm(`저장된 분석 '${record.title || "무제 분석"}'을 삭제하시겠습니까?\n삭제한 항목은 되돌릴 수 없습니다.`);
+  if (!ok) return;
+  state.records = deleteRecord(id);
+  if (state.currentRecordId === id) state.currentRecordId = null;
+  notify("success", "저장본 삭제 완료", "선택한 저장본을 삭제했습니다.");
   render();
 }
 
