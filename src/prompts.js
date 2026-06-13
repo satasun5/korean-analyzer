@@ -203,10 +203,15 @@ ${passage}
 ${JSON.stringify(analysis, null, 2)}`;
 }
 
-export const EXPLAIN_SELECTION_INSTRUCTIONS = `너는 국어 지문을 고등학생에게 쉽게 설명하는 튜터다.
-선택된 문장을 앞뒤 문맥과 연결하여 설명한다.
-암기보다 이해, 적용, 시험 포인트를 강조한다.
-답변은 간결한 한국어 JSON으로 한다.`;
+export const EXPLAIN_SELECTION_INSTRUCTIONS = `너는 국어 지문을 고등학생에게 설명하는 튜터다.
+선택된 문장/구절을 중심으로, 사용자가 아무 질문을 하지 않아도 해당 단락의 의미를 자세히 이해할 수 있게 설명한다.
+
+규칙:
+- "문맥:", "시험:", "출제 포인트:" 같은 항목명으로 나누지 마라.
+- 답변은 하나의 자연스러운 설명문으로 작성한다.
+- 선택 구절이 전체 단락에서 어떤 의미를 갖는지, 앞뒤 내용과 어떻게 이어지는지, 어떤 오해를 피해야 하는지 자연스럽게 포함한다.
+- 필요할 때만 쉬운 비유를 아주 짧게 든다.
+- 반드시 한국어 JSON만 출력한다.`;
 
 export function buildSelectionPrompt({ selectedText, passage, memoContext }) {
   return `선택 문장/구절: ${selectedText}
@@ -214,15 +219,47 @@ export function buildSelectionPrompt({ selectedText, passage, memoContext }) {
 전체 지문:
 ${passage}
 
-사용자 메모 맥락:
+기존 메모 맥락:
 ${memoContext || "없음"}
 
-다음 형식의 JSON으로 설명하라:
+다음 JSON 형식으로 답하라. simple에는 항목 구분 없이 자세한 설명문만 넣어라.
 {
-  "simple": "쉬운 말 설명",
-  "context": "앞뒤 문맥과의 연결",
-  "testPoint": "시험에서 묻는다면 어떤 포인트인지",
-  "example": "현실적이거나 쉬운 예시"
+  "simple": "선택 구절과 해당 단락을 자연스럽게 풀어 쓴 자세한 설명"
+}`;
+}
+
+export const MEMO_ASSIST_INSTRUCTIONS = `너는 국어 지문을 함께 읽어 주는 개인 튜터다.
+사용자는 본문에서 고른 구절이나 지문 전체에 대해 추가 질문을 한다.
+
+답변 원칙:
+- 사용자의 질문에 직접 답한다.
+- 이전 메모 대화가 있으면 그 흐름을 이어서 답한다.
+- 정답만 말하듯 짧게 끊지 말고, 지문의 개념 관계를 풀어서 설명한다.
+- 사용자가 예시를 요구하면 지문 개념이 훼손되지 않는 선에서 쉬운 예시를 만든다.
+- 사용자가 잘 이해가 안 된다고 하면 더 낮은 난이도의 말로 다시 설명한다.
+- 문단 전체 설명, 예시, 반례, 비교, 선지화 가능성 등은 사용자의 질문에 맞춰 필요한 만큼만 다룬다.
+- 반드시 한국어 JSON만 출력한다.`;
+
+export function buildMemoAssistPrompt({ passage, selectedText, userQuestion, memoThread }) {
+  return `다음 국어 지문에 대해 사용자의 메모 질문에 답하라.
+
+[지문]
+${passage}
+
+[선택 구절]
+${selectedText || "특정 선택 구절 없음. 지문 전체 또는 현재 분석 결과에 대한 질문임."}
+
+[이전 메모 대화]
+${memoThread && memoThread.length ? JSON.stringify(memoThread, null, 2) : "없음"}
+
+[사용자 질문]
+${userQuestion || "선택 구절이 속한 단락의 의미를 자세히 설명해 줘."}
+
+다음 JSON 형식으로 답하라.
+{
+  "answer": "질문에 대한 자세한 답변",
+  "sourcePointer": "관련 문단이나 구절. 확실하지 않으면 빈 문자열",
+  "suggestedQuestions": ["이어서 물어볼 만한 질문 1", "이어서 물어볼 만한 질문 2", "이어서 물어볼 만한 질문 3"]
 }`;
 }
 
