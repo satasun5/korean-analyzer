@@ -1180,8 +1180,8 @@ function renderBotChatPanel() {
   const disabled = !state.analysis || state.botChatLoading;
   return `<section class="bot-chat-card standalone-card">
     <div class="bot-chat-head">
-      <div><b>AI 댓글</b><span>질문을 남기면 지문 근거를 바탕으로 짧은 댓글이 달립니다</span></div>
-      ${state.botChatLoading ? `<div class="tiny-loader"><span></span>댓글 작성 중</div>` : ""}
+      <div><b>AI 댓글</b><span>지문을 던져 주면 댓글들이 제멋대로, 그래도 근거 있게 떠듭니다.</span></div>
+      ${state.botChatLoading ? `<div class="tiny-loader"><span></span>댓글 쓰는 중</div>` : ""}
     </div>
     <div class="inline-control bot-input-line">
       <input class="input" id="botChatInput" value="${escapeHtml(state.botChatInput || "")}" placeholder="예: 이 지문에서 선지 함정이 될 부분 알려줘" ${!state.analysis ? "disabled" : ""} />
@@ -1189,7 +1189,7 @@ function renderBotChatPanel() {
     </div>
     ${!state.analysis ? `<p class="hint-line">지문 분석을 먼저 완료하면 AI 댓글을 사용할 수 있습니다.</p>` : `<p class="hint-line">AI 댓글은 메뉴의 저비용 모델을 사용합니다.</p>`}
     <div class="bot-thread-list">
-      ${(state.botChatThreads || []).map((t) => renderBotThread(t)).join("") || `<div class="empty compact-empty">아직 댓글이 없습니다. 질문을 남기면 AI 댓글이 달립니다.</div>`}
+      ${(state.botChatThreads || []).map((t) => renderBotThread(t)).join("") || `<div class="empty compact-empty">아직 댓글이 없습니다. 질문을 남기면 조그만 댓글창이 열립니다.</div>`}
     </div>
   </section>`;
 }
@@ -1207,18 +1207,19 @@ function renderBotComment(comment, threadId, depth = 0) {
   const inputValue = state.botReplyInputs[key] || "";
   const loading = state.botReplyLoading === key;
   const replies = comment.replyThreads || [];
+  const sideReplies = ensureArray(comment.sideReplies);
   return `<div class="bot-comment depth-${Math.min(depth, 2)}">
     <div class="bot-avatar">${escapeHtml(getBotInitial(comment.author))}</div>
     <div class="bot-bubble">
-      <div class="bot-meta"><b>${escapeHtml(comment.author || "AI친구")}</b><span>AI</span><em>${escapeHtml(comment.persona || "근거 담당")}</em></div>
-      <p>${escapeHtml(comment.text || "근거를 더 확인해 볼게요.")}</p>
-      ${comment.sourcePointer ? `<div class="bot-source">근거: ${escapeHtml(comment.sourcePointer)}</div>` : ""}
+      <div class="bot-meta"><b>${escapeHtml(comment.author || "익명의 독자")}</b><time>${escapeHtml(comment.timeLabel || "방금 전")}</time></div>
+      <p>${escapeHtml(comment.text || "음... 이건 지문을 한 번 더 붙잡아 봐야겠는데?")}</p>
+      ${sideReplies.length ? `<div class="bot-side-replies">${sideReplies.map((r) => `<div class="bot-side-reply"><span>↳</span><b>${escapeHtml(r.author || "옆자리")}</b><em>${escapeHtml(r.text || "거기 아니고 이쪽인 듯.")}</em></div>`).join("")}</div>` : ""}
       <div class="bot-actions"><button class="bot-reply-btn" data-open-bot-reply="${escapeHtml(key)}">${open ? "닫기" : "답글로 질문"}</button></div>
       ${open ? `<div class="bot-reply-box">
-        <input class="input" data-bot-reply-input="${escapeHtml(key)}" value="${escapeHtml(inputValue)}" placeholder="이 답글에 이어서 질문하기" />
+        <input class="input" data-bot-reply-input="${escapeHtml(key)}" value="${escapeHtml(inputValue)}" placeholder="이 댓글에 대고 다시 물어보기" />
         <button class="btn tiny primary" data-bot-reply-ask="${escapeHtml(key)}" ${loading ? "disabled" : ""}>${loading ? "작성 중" : "질문"}</button>
       </div>` : ""}
-      ${loading ? `<div class="mini-loader bot-mini-loader"><span></span><b>이 답글의 맥락으로 1~2개 댓글을 쓰는 중</b></div>` : ""}
+      ${loading ? `<div class="mini-loader bot-mini-loader"><span></span><b>댓글들이 답글을 쓰는 중</b></div>` : ""}
       ${replies.map((rt) => `<div class="bot-reply-thread"><div class="bot-user-question small"><b>나</b> ${escapeHtml(rt.question)}</div>${(rt.comments || []).map((r) => renderBotComment(r, threadId, depth + 1)).join("")}</div>`).join("")}
     </div>
   </div>`;
@@ -2100,13 +2101,18 @@ function findBotComment(comments = [], commentId) {
 }
 
 function normalizeBotComments(comments = [], parentId = "") {
-  const personas = ["헤헤파", "근거봇", "츤데레", "소크라봇", "정직한애", "반박요정", "정리충", "오답감지기"];
+  const fallbackNames = ["익명의 독자", "옆자리 고수", "문장 줍는 애", "선지 경비원", "찻잔 든 독해러", "지문 뒤적이" ];
   return ensureArray(comments).slice(0, 8).map((c, index) => ({
     id: c?.id || uid("bot"),
-    author: String(c?.author || personas[index % personas.length]).slice(0, 16),
-    persona: String(c?.persona || personas[index % personas.length]).slice(0, 20),
-    text: shorten(String(c?.text || "지문 근거를 다시 확인해 보자.").replace(/\s+/g, " "), 120),
+    author: String(c?.author || fallbackNames[index % fallbackNames.length]).slice(0, 18),
+    persona: String(c?.persona || "").slice(0, 24),
+    text: shorten(String(c?.text || "음... 지문에서 근거를 먼저 주워 와야겠는데?").replace(/\s+/g, " "), 220),
     sourcePointer: shorten(String(c?.sourcePointer || ""), 90),
+    timeLabel: shorten(String(c?.timeLabel || (index ? "방금 전" : "지금")), 12),
+    sideReplies: ensureArray(c?.sideReplies).slice(0, 2).map((r, ri) => ({
+      author: String(r?.author || (ri ? "지나가던 독자" : "옆댓글")).slice(0, 18),
+      text: shorten(String(r?.text || "그 말도 맞는데, 근거는 살짝 더 좁게 봐야 함.").replace(/\s+/g, " "), 120)
+    })),
     parentId,
     replyThreads: ensureArray(c?.replyThreads)
   }));
@@ -2120,7 +2126,7 @@ async function runBotChatAsk(quickQuestion = "") {
     const apiKey = getApiKey();
     if (!state.demoMode && !apiKey) return notify("error", "API 키가 없습니다", "AI 댓글 기능은 API 키를 사용합니다. 설정 메뉴에서 키를 입력해 주세요.");
     state.botChatLoading = true;
-    state.tab = "saved";
+    state.tab = "comments";
     render();
     try {
       let result;
@@ -2196,15 +2202,15 @@ async function runBotReplyAsk(key) {
 
 function createDemoBotComments(question, replyMode = false) {
   const base = replyMode ? [
-    { author: "근거만봄", persona: "근거봇", text: "그 질문은 앞 문단의 조건을 같이 봐야 해. 단어만 보면 반대로 읽히기 쉬워.", sourcePointer: "관련 문단의 조건·결론 연결" },
-    { author: "헤헤독해", persona: "헤헤파", text: "헤헤, 지금 헷갈린 건 개념이 아니라 방향이야. A가 B를 낳는지부터 보자.", sourcePointer: "인과 관계가 제시된 문장" }
+    { author: "옆자리 독자", text: "그 질문이면 먼저 ‘누가 무엇을 보장한다고 했는지’를 잡아야 해. 지금 헷갈린 건 결론보다 전제 쪽 같음.", timeLabel: "방금 전" },
+    { author: "문장줍는 콩", text: "아니 근데 여기 선지로 나오면 진짜 얄밉겠다. 표현은 비슷한데 인과 방향만 슬쩍 돌릴 수 있음.", timeLabel: "방금 전" }
   ] : [
-    { author: "근거만봄", persona: "근거봇", text: "일단 원문 근거는 정의 문장에 있어. 질문은 그 정의의 범위를 묻는 쪽이야.", sourcePointer: "개념 정의가 나오는 문단" },
-    { author: "츤츤풀이", persona: "츤데레", text: "틀린 질문은 아닌데, 단어 하나만 보면 낚여. 앞뒤 조건을 같이 보라고.", sourcePointer: "조건이 붙은 문장" },
-    { author: "소크라봇", persona: "질문형", text: "그럼 먼저 물어보자. 이 개념은 원인일까, 결과일까? 거기서 선지가 갈려.", sourcePointer: "원인-결과 연결부" },
-    { author: "오답감지기", persona: "함정 담당", text: "문제로 나오면 범위 확대가 함정일 듯. ‘항상’ 같은 말이 붙으면 의심해 봐.", sourcePointer: "한정 표현이 있는 부분" }
+    { author: "초코독자", text: "이 질문은 핵심어 하나만 보면 안 되고, 앞 문단의 조건이랑 같이 묶어야 풀려. 단어는 착한데 구조가 좀 얄미움.", timeLabel: "지금" },
+    { author: "찻잔 든 문장러", text: "지문 근거로만 보면 답은 ‘그럴듯한 일반론’이 아니라 해당 문단에서 정한 관계 안에서만 말해야 해. 밖으로 나가면 미끄러짐.", timeLabel: "방금 전" },
+    { author: "지나가던 선지꾼", text: "나라면 이걸 선지로 낼 때 ‘원인↔결과’나 ‘조건↔결론’을 바꿔 놓을 듯. 읽은 사람만 살짝 불편함을 느낌.", timeLabel: "방금 전", sideReplies: [{ author: "옆댓글", text: "ㅇㅇ 그게 제일 악질임. 겉보기엔 맞는 말 같아서 더 싫어." }] },
+    { author: "몽실한 근거통", text: "헷갈리면 ‘이 문장이 설명하는 대상이 무엇인가?’부터 표시해 봐. 대상이 바뀌는 순간 선지가 갑자기 함정이 돼.", timeLabel: "방금 전" }
   ];
-  return { comments: base.slice(0, replyMode ? 2 : 4).map((c) => ({ id: uid("bot"), ...c })) };
+  return { comments: base.slice(0, replyMode ? 2 : 4).map((c) => ({ id: uid("bot"), persona: "", sourcePointer: "", ...c })) };
 }
 
 function saveCurrentRecord() {

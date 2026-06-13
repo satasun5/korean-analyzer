@@ -1227,3 +1227,52 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   .saved-tab-grid { grid-template-columns: 1fr; }
   .bot-thread-list { max-height: none; }
 }
+
+/* v2.12: AI 댓글을 설명 카드가 아니라 실제 댓글창처럼 보이게 조정 */
+.bot-chat-card { background: color-mix(in srgb, var(--card) 96%, #eef6ff 4%); }
+.bot-chat-head span { color: var(--muted); }
+.bot-thread { border-top: 1px solid color-mix(in srgb, var(--line) 82%, transparent); padding-top: 16px; }
+.bot-user-question { border-radius: 18px; background: color-mix(in srgb, var(--accent) 7%, var(--card)); }
+.bot-comment-list { gap: 12px; }
+.bot-comment { grid-template-columns: 38px minmax(0, 1fr); gap: 12px; }
+.bot-avatar {
+  width: 38px;
+  height: 38px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 55%, #ecfeff 100%);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+  color: color-mix(in srgb, var(--accent) 74%, #334155);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .05);
+}
+.bot-bubble {
+  border-radius: 18px 18px 18px 8px;
+  background: color-mix(in srgb, var(--card) 97%, var(--accent) 3%);
+  padding: 12px 14px;
+}
+.bot-meta { margin-bottom: 6px; gap: 8px; }
+.bot-meta b { font-size: 15px; letter-spacing: -.01em; }
+.bot-meta time { color: var(--muted); font-size: 12px; }
+.bot-meta span,
+.bot-meta em,
+.bot-source { display: none !important; }
+.bot-bubble p { font-size: 15px; line-height: 1.7; word-break: keep-all; }
+.bot-actions { margin-top: 6px; }
+.bot-reply-btn { font-size: 13px; opacity: .9; }
+.bot-side-replies {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+}
+.bot-side-reply {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.bot-side-reply span { color: color-mix(in srgb, var(--accent) 60%, var(--muted)); }
+.bot-side-reply b { color: var(--text); font-size: 13px; white-space: nowrap; }
+.bot-side-reply em { font-style: normal; overflow-wrap: anywhere; }
+.bot-reply-thread { border-left: 2px dotted color-mix(in srgb, var(--accent) 18%, var(--line)); padding-left: 8px; }

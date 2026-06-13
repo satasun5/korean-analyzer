@@ -313,12 +313,26 @@ export async function askChatBots({ apiKey, model, passage, analysis, userQuesti
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["author", "persona", "text", "sourcePointer"],
+          required: ["author", "persona", "text", "sourcePointer", "timeLabel", "sideReplies"],
           properties: {
             author: { type: "string" },
             persona: { type: "string" },
             text: { type: "string" },
-            sourcePointer: { type: "string" }
+            sourcePointer: { type: "string" },
+            timeLabel: { type: "string" },
+            sideReplies: {
+              type: "array",
+              maxItems: 2,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["author", "text"],
+                properties: {
+                  author: { type: "string" },
+                  text: { type: "string" }
+                }
+              }
+            }
           }
         }
       }
