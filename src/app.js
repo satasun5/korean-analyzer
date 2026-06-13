@@ -77,7 +77,7 @@ const state = {
   qnaOpen: {},
   // 실행 중인 비동기 작업을 추적하여 버튼 연타와 중복 API 호출을 방지합니다.
   inFlight: {},
-  // 저장 탭의 AI 댓글 친구들 상태. 일반 메모/문제 Q&A와 분리해 충돌을 줄입니다.
+  // AI 댓글 탭 상태. 일반 메모/문제 Q&A와 분리해 충돌을 줄입니다.
   botChatInput: "",
   botChatThreads: [],
   botChatLoading: false,
@@ -2101,17 +2101,17 @@ function findBotComment(comments = [], commentId) {
 }
 
 function normalizeBotComments(comments = [], parentId = "") {
-  const fallbackNames = ["익명의 독자", "옆자리 고수", "문장 줍는 애", "선지 경비원", "찻잔 든 독해러", "지문 뒤적이" ];
+  const fallbackNames = ["문단밀수꾼", "선지비빔밥", "밑줄뒤망령", "오답수거반", "지문옆집사람", "단어가방털이", "국어하다온사람", "개념도둑맞음" ];
   return ensureArray(comments).slice(0, 8).map((c, index) => ({
     id: c?.id || uid("bot"),
     author: String(c?.author || fallbackNames[index % fallbackNames.length]).slice(0, 18),
     persona: String(c?.persona || "").slice(0, 24),
-    text: shorten(String(c?.text || "음... 지문에서 근거를 먼저 주워 와야겠는데?").replace(/\s+/g, " "), 220),
+    text: shorten(String(c?.text || "음... 이건 지문에서 근거를 먼저 주워 와야겠는데? 일단 문단부터 잡고 가자.").replace(/\s+/g, " "), 340),
     sourcePointer: shorten(String(c?.sourcePointer || ""), 90),
     timeLabel: shorten(String(c?.timeLabel || (index ? "방금 전" : "지금")), 12),
     sideReplies: ensureArray(c?.sideReplies).slice(0, 2).map((r, ri) => ({
       author: String(r?.author || (ri ? "지나가던 독자" : "옆댓글")).slice(0, 18),
-      text: shorten(String(r?.text || "그 말도 맞는데, 근거는 살짝 더 좁게 봐야 함.").replace(/\s+/g, " "), 120)
+      text: shorten(String(r?.text || "그 말도 맞는데, 근거는 살짝 더 좁게 봐야 함.").replace(/\s+/g, " "), 160)
     })),
     parentId,
     replyThreads: ensureArray(c?.replyThreads)
@@ -2119,7 +2119,7 @@ function normalizeBotComments(comments = [], parentId = "") {
 }
 
 async function runBotChatAsk(quickQuestion = "") {
-  if (!state.analysis) return notify("info", "분석 결과가 없습니다", "먼저 지문을 분석한 뒤 AI 댓글 친구들을 불러 주세요.");
+  if (!state.analysis) return notify("info", "분석 결과가 없습니다", "먼저 지문을 분석한 뒤 AI 댓글을 남겨 주세요.");
   const question = (quickQuestion || document.querySelector("#botChatInput")?.value || state.botChatInput || "").trim();
   if (!question) return notify("info", "질문이 비어 있습니다", "질문을 직접 입력하거나 예상 질문 버튼을 눌러 주세요.");
   return runExclusive("botChatAsk", async () => {
@@ -2202,13 +2202,13 @@ async function runBotReplyAsk(key) {
 
 function createDemoBotComments(question, replyMode = false) {
   const base = replyMode ? [
-    { author: "옆자리 독자", text: "그 질문이면 먼저 ‘누가 무엇을 보장한다고 했는지’를 잡아야 해. 지금 헷갈린 건 결론보다 전제 쪽 같음.", timeLabel: "방금 전" },
-    { author: "문장줍는 콩", text: "아니 근데 여기 선지로 나오면 진짜 얄밉겠다. 표현은 비슷한데 인과 방향만 슬쩍 돌릴 수 있음.", timeLabel: "방금 전" }
+    { author: "문단밀수꾼", text: "그 질문이면 부모 댓글에서 ‘대상’이 어디로 잡혔는지부터 봐야 함. 결론만 들고 뛰면 선지가 뒤에서 발목 잡음.", timeLabel: "방금 전" },
+    { author: "옆자리개추러", text: "윗댓 말 맞음. 지금은 답보다 조건 찾기가 먼저임. 조건 빼고 말하면 갑자기 맞는 듯한 오답 됨ㅋㅋ", timeLabel: "방금 전" }
   ] : [
-    { author: "초코독자", text: "이 질문은 핵심어 하나만 보면 안 되고, 앞 문단의 조건이랑 같이 묶어야 풀려. 단어는 착한데 구조가 좀 얄미움.", timeLabel: "지금" },
-    { author: "찻잔 든 문장러", text: "지문 근거로만 보면 답은 ‘그럴듯한 일반론’이 아니라 해당 문단에서 정한 관계 안에서만 말해야 해. 밖으로 나가면 미끄러짐.", timeLabel: "방금 전" },
-    { author: "지나가던 선지꾼", text: "나라면 이걸 선지로 낼 때 ‘원인↔결과’나 ‘조건↔결론’을 바꿔 놓을 듯. 읽은 사람만 살짝 불편함을 느낌.", timeLabel: "방금 전", sideReplies: [{ author: "옆댓글", text: "ㅇㅇ 그게 제일 악질임. 겉보기엔 맞는 말 같아서 더 싫어." }] },
-    { author: "몽실한 근거통", text: "헷갈리면 ‘이 문장이 설명하는 대상이 무엇인가?’부터 표시해 봐. 대상이 바뀌는 순간 선지가 갑자기 함정이 돼.", timeLabel: "방금 전" }
+    { author: "선지비빔밥", text: "이건 단어 하나로 끝나는 질문이 아니라, 앞 문단 조건이랑 같이 비벼야 풀림. 비빔은 맛있는데 선지는 이렇게 비비면 위험함.", timeLabel: "지금" },
+    { author: "오답수거반", text: "지문 안에서 정한 관계 밖으로 나가면 바로 미끄러짐. ‘그럴듯한 일반론’ 말고, 해당 문단이 걸어 둔 조건 안에서만 판단해야 해.", timeLabel: "방금 전" },
+    { author: "밑줄뒤망령", text: "나라면 이거 선지로 낼 때 인과 방향만 슬쩍 뒤집음. 읽은 사람은 불편해하고 안 읽은 사람은 박수치며 틀림.", timeLabel: "방금 전", sideReplies: [{ author: "지문옆집사람", text: "님 표현은 수상한데 맞는 말이라 더 수상함." }] },
+    { author: "단어가방털이", text: "헷갈리면 ‘이 문장이 설명하는 대상이 뭐냐’부터 잡아 봐. 대상이 바뀌는 순간 같은 말처럼 보여도 다른 선지가 됨.", timeLabel: "방금 전" }
   ];
   return { comments: base.slice(0, replyMode ? 2 : 4).map((c) => ({ id: uid("bot"), persona: "", sourcePointer: "", ...c })) };
 }
