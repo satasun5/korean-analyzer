@@ -15,7 +15,9 @@ import {
   BATCH_SHORT_GRADING_INSTRUCTIONS,
   buildBatchShortGradingPrompt,
   MEMO_ASSIST_INSTRUCTIONS,
-  buildMemoAssistPrompt
+  buildMemoAssistPrompt,
+  CHAT_BOTS_INSTRUCTIONS,
+  buildChatBotsPrompt
 } from "./prompts.js";
 
 const ENDPOINT = "https://api.openai.com/v1/responses";
@@ -297,6 +299,42 @@ export async function askAboutMemo({ apiKey, model, reasoningMode, reasoningEffo
     schemaName: "memo_assist"
   });
 }
+
+export async function askChatBots({ apiKey, model, passage, analysis, userQuestion, parentComment, replyMode }) {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["comments"],
+    properties: {
+      comments: {
+        type: "array",
+        minItems: 1,
+        maxItems: replyMode ? 2 : 8,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["author", "persona", "text", "sourcePointer"],
+          properties: {
+            author: { type: "string" },
+            persona: { type: "string" },
+            text: { type: "string" },
+            sourcePointer: { type: "string" }
+          }
+        }
+      }
+    }
+  };
+  return callResponses({
+    apiKey,
+    model,
+    reasoningMode: false,
+    instructions: CHAT_BOTS_INSTRUCTIONS,
+    prompt: buildChatBotsPrompt({ passage, analysis, userQuestion, parentComment, replyMode }),
+    schema,
+    schemaName: "cute_grounded_comment_bots"
+  });
+}
+
 
 export async function askAboutQuestion({ apiKey, model, reasoningMode, reasoningEffort, passage, questionData, userQuestion, selectedAnswer, solved }) {
   const schema = {

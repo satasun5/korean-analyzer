@@ -1,4 +1,4 @@
-import { analyzePassage, generateQuestions, explainSelection, askAboutQuestion, cleanupPassageWithAi, gradeShortAnswer, gradeShortAnswersBatch, askAboutMemo } from "./ai.js";
+import { analyzePassage, generateQuestions, explainSelection, askAboutQuestion, cleanupPassageWithAi, gradeShortAnswer, gradeShortAnswersBatch, askAboutMemo, askChatBots } from "./ai.js";
 import { createDemoAnalysis, createDemoQuestions, SAMPLE_PASSAGE } from "./sample.js";
 import { loadRecords, saveRecord, deleteRecord, loadSettings, saveSettings } from "./storage.js";
 
@@ -76,7 +76,14 @@ const state = {
   shortGradeConfirm: {},
   qnaOpen: {},
   // 실행 중인 비동기 작업을 추적하여 버튼 연타와 중복 API 호출을 방지합니다.
-  inFlight: {}
+  inFlight: {},
+  // 저장 탭의 AI 댓글 친구들 상태. 일반 메모/문제 Q&A와 분리해 충돌을 줄입니다.
+  botChatInput: "",
+  botChatThreads: [],
+  botChatLoading: false,
+  botReplyInputs: {},
+  botReplyOpen: {},
+  botReplyLoading: null
 };
 
 document.documentElement.dataset.theme = state.theme;
@@ -242,6 +249,12 @@ function renderMarkdownText(value = "") {
 function shorten(value = "", max = 80) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+
+function cssEscape(value = "") {
+  if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(String(value));
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
 function escapeRegExp(value = "") {
@@ -683,7 +696,6 @@ function renderReaderPanel() {
         <div class="panel-title">지문 <small>${hasAnalysis ? "드래그하면 AI 설명 메모를 만들 수 있습니다" : "분석할 지문을 넣어 주세요"}</small></div>
         <div class="reader-tools">
           <button class="btn small primary" id="analyzeBtn">분석하기</button>
-          <button class="btn small" id="questionBtn" ${state.analysis ? "" : "disabled"}>문제 제작</button>
         </div>
       </div>
       <div class="panel-body" data-scroll-key="reader">
@@ -805,6 +817,20 @@ function renderHighlightFilters() {
         <button class="chip ${state.filters[key] ? "" : "off"}" data-filter="${key}"><span class="dot ${key}"></span>${label}</button>
       `).join("")}
     </div>`;
+}
+
+
+function getReaderQuestionSuggestions() {
+  const generated = ensureArray(state.analysis?.suggestedReaderQuestions)
+    .map((q) => String(q || "").trim())
+    .filter(Boolean);
+  const fallback = [
+    "이 지문에서 제일 헷갈리기 쉬운 논리 연결을 설명해줘",
+    "핵심 개념을 쉬운 예시로 설명해줘",
+    "문제 선지로 바뀌면 어디가 함정이 될지 알려줘",
+    "비교·대조되는 개념을 다시 정리해줘"
+  ];
+  return [...generated, ...fallback].filter((q, i, arr) => arr.indexOf(q) === i).slice(0, 6);
 }
 
 function renderReaderAskCard() {
@@ -971,14 +997,24 @@ function renderConceptsTab() {
 
 function renderQuestionsTab() {
   if (state.loading === "questions") {
-    return `<div class="kv"><div class="card question-loading-card">${renderLoading()}<p class="notice compact">문제를 제작 중이에요. 특히 선지별 정답/오답 이유를 먼저 설계하고 있어서 마지막 단계가 조금 오래 걸릴 수 있습니다.</p></div></div>`;
+    return `<div class="kv"><div class="card question-loading-card">${renderLoading()}<p class="notice compact">문제를 제작 중이에요. 선지별 정답/오답 이유를 먼저 설계하고 있어서 마지막 단계가 조금 오래 걸릴 수 있습니다.</p></div></div>`;
+  }
+  if (!state.analysis) {
+    return `<div class="empty">먼저 지문을 분석하면 문제를 제작할 수 있습니다.</div>`;
   }
   if (!state.questions) {
-    return `<div class="empty">문제는 분석과 분리해서 생성합니다.<br><b>문제 제작</b> 버튼을 누르면 5지선다, OX, 서술형을 만듭니다.</div>`;
+    return `<div class="empty question-start-card">
+      <b>아직 제작된 문제가 없습니다.</b><br>
+      분석 결과를 바탕으로 5지선다, OX, 서술형 문제를 따로 생성합니다.
+      <button class="btn primary" id="questionBtn" style="margin-top:14px">문제 제작 시작</button>
+    </div>`;
   }
   return `
-    <div class="tabs" style="padding:0 0 10px;border:0">
-      ${[["mc", "5지선다"], ["ox", "OX"], ["short", "서술형"]].map(([id, label]) => `<button class="tab ${state.questionTab === id ? "active" : ""}" data-qtab="${id}">${label}</button>`).join("")}
+    <div class="question-tab-head">
+      <div class="tabs" style="padding:0;border:0">
+        ${[["mc", "5지선다"], ["ox", "OX"], ["short", "서술형"]].map(([id, label]) => `<button class="tab ${state.questionTab === id ? "active" : ""}" data-qtab="${id}">${label}</button>`).join("")}
+      </div>
+      <button class="btn small" id="questionBtn">문제 다시 제작</button>
     </div>
     ${state.questionTab === "mc" ? renderMultipleChoice() : state.questionTab === "ox" ? renderOx() : renderShortAnswer()}`;
 }
@@ -1128,9 +1164,71 @@ function renderMemoCard(n) {
 }
 
 function renderSavedTab() {
-  const records = state.records;
-  if (!records.length) return `<div class="empty">저장된 분석이 없습니다.</div>`;
-  return `<div class="saved-list">${records.map((r) => `<div class="card saved-item"><div><h4>${escapeHtml(r.title)}</h4><p>${escapeHtml(new Date(r.createdAt).toLocaleString())} · ${escapeHtml(r.field || "")}</p></div><div><button class="btn small" data-load-record="${r.id}">열기</button><button class="btn small danger" data-del-record="${r.id}">삭제</button></div></div>`).join("")}</div>`;
+  const records = state.records || [];
+  return `<div class="saved-tab-grid">
+    ${renderBotChatPanel()}
+    <section class="saved-records-card">
+      <div class="saved-headline"><b>저장된 분석 노트</b><span>${records.length}개</span></div>
+      ${records.length ? `<div class="saved-list">${records.map((r) => `<div class="card saved-item"><div><h4>${escapeHtml(r.title)}</h4><p>${escapeHtml(new Date(r.createdAt).toLocaleString())} · ${escapeHtml(r.field || "")}</p></div><div><button class="btn small" data-load-record="${r.id}">열기</button><button class="btn small danger" data-del-record="${r.id}">삭제</button></div></div>`).join("")}</div>` : `<div class="empty compact-empty">저장된 분석이 없습니다.</div>`}
+    </section>
+  </div>`;
+}
+
+function renderBotChatPanel() {
+  const quicks = getReaderQuestionSuggestions().slice(0, 4);
+  const disabled = !state.analysis || state.botChatLoading;
+  return `<section class="bot-chat-card">
+    <div class="bot-chat-head">
+      <div><b>AI 댓글 친구들</b><span>지문 근거로 짧고 귀엽게 답글을 달아줍니다</span></div>
+      ${state.botChatLoading ? `<div class="tiny-loader"><span></span>댓글 작성 중</div>` : ""}
+    </div>
+    <div class="bot-quick-row">
+      ${quicks.map((q) => `<button class="suggestion-chip" data-bot-quick="${escapeHtml(q)}" ${disabled ? "disabled" : ""}>${escapeHtml(q)}</button>`).join("")}
+    </div>
+    <div class="inline-control bot-input-line">
+      <input class="input" id="botChatInput" value="${escapeHtml(state.botChatInput || "")}" placeholder="예: 이 지문에서 선지 함정이 될 부분 알려줘" ${!state.analysis ? "disabled" : ""} />
+      <button class="btn small primary" id="botChatAskBtn" ${disabled ? "disabled" : ""}>질문</button>
+    </div>
+    ${!state.analysis ? `<p class="hint-line">지문 분석을 먼저 완료하면 AI 댓글 친구들을 사용할 수 있습니다.</p>` : ""}
+    <div class="bot-thread-list">
+      ${(state.botChatThreads || []).map((t) => renderBotThread(t)).join("") || `<div class="empty compact-empty">아직 댓글이 없습니다. 질문을 남기면 여러 AI 친구들이 답글을 달아줍니다.</div>`}
+    </div>
+  </section>`;
+}
+
+function renderBotThread(thread) {
+  return `<article class="bot-thread">
+    <div class="bot-user-question"><b>Q.</b> ${escapeHtml(thread.question)}</div>
+    <div class="bot-comment-list">${(thread.comments || []).map((c) => renderBotComment(c, thread.id, 0)).join("")}</div>
+  </article>`;
+}
+
+function renderBotComment(comment, threadId, depth = 0) {
+  const key = `${threadId}:${comment.id}`;
+  const open = !!state.botReplyOpen[key];
+  const inputValue = state.botReplyInputs[key] || "";
+  const loading = state.botReplyLoading === key;
+  const replies = comment.replyThreads || [];
+  return `<div class="bot-comment depth-${Math.min(depth, 2)}">
+    <div class="bot-avatar">${escapeHtml(getBotInitial(comment.author))}</div>
+    <div class="bot-bubble">
+      <div class="bot-meta"><b>${escapeHtml(comment.author || "AI친구")}</b><span>AI</span><em>${escapeHtml(comment.persona || "근거 담당")}</em></div>
+      <p>${escapeHtml(comment.text || "근거를 더 확인해 볼게요.")}</p>
+      ${comment.sourcePointer ? `<div class="bot-source">근거: ${escapeHtml(comment.sourcePointer)}</div>` : ""}
+      <div class="bot-actions"><button class="bot-reply-btn" data-open-bot-reply="${escapeHtml(key)}">${open ? "닫기" : "답글로 질문"}</button></div>
+      ${open ? `<div class="bot-reply-box">
+        <input class="input" data-bot-reply-input="${escapeHtml(key)}" value="${escapeHtml(inputValue)}" placeholder="이 답글에 이어서 질문하기" />
+        <button class="btn tiny primary" data-bot-reply-ask="${escapeHtml(key)}" ${loading ? "disabled" : ""}>${loading ? "작성 중" : "질문"}</button>
+      </div>` : ""}
+      ${loading ? `<div class="mini-loader bot-mini-loader"><span></span><b>이 답글의 맥락으로 1~2개 댓글을 쓰는 중</b></div>` : ""}
+      ${replies.map((rt) => `<div class="bot-reply-thread"><div class="bot-user-question small"><b>나</b> ${escapeHtml(rt.question)}</div>${(rt.comments || []).map((r) => renderBotComment(r, threadId, depth + 1)).join("")}</div>`).join("")}
+    </div>
+  </div>`;
+}
+
+function getBotInitial(name = "") {
+  const clean = String(name || "AI").replace(/\s+/g, "").trim();
+  return clean ? clean.slice(0, 1) : "A";
 }
 
 function renderMindmapPanel() {
@@ -1262,6 +1360,10 @@ function attachAppEvents() {
     state.qnaInputs = {};
     state.qnaMessages = {};
     state.qnaOpen = {};
+    state.botChatThreads = [];
+    state.botChatInput = "";
+    state.botReplyInputs = {};
+    state.botReplyOpen = {};
     state.mindPositions = {};
     state.mindPan = { x: 0, y: 0 };
     state.mindZoom = 1;
@@ -1287,6 +1389,7 @@ function attachAppEvents() {
       state.qnaInputs = snap.qnaInputs || {};
       state.qnaMessages = snap.qnaMessages || {};
       state.qnaOpen = snap.qnaOpen || {};
+      state.botChatThreads = ensureArray(snap.botChatThreads);
       state.mindPositions = snap.mindPositions || {};
       state.mindPan = snap.mindPan || { x: 0, y: 0 };
       state.mindZoom = snap.mindZoom || 1;
@@ -1300,6 +1403,7 @@ function attachAppEvents() {
         userAnswers: structuredCloneSafe(state.userAnswers), revealAnswers: structuredCloneSafe(state.revealAnswers),
         shortGrades: structuredCloneSafe(state.shortGrades), qnaInputs: structuredCloneSafe(state.qnaInputs),
         qnaMessages: structuredCloneSafe(state.qnaMessages), qnaOpen: structuredCloneSafe(state.qnaOpen),
+        botChatThreads: structuredCloneSafe(state.botChatThreads),
         mindPositions: structuredCloneSafe(state.mindPositions), mindPan: { ...(state.mindPan || { x: 0, y: 0 }) }, mindZoom: state.mindZoom || 1
       };
       state.userPassageSnapshot = state.userWorkspaceSnapshot.passage;
@@ -1313,6 +1417,10 @@ function attachAppEvents() {
       state.qnaInputs = {};
       state.qnaMessages = {};
       state.qnaOpen = {};
+      state.botChatThreads = [];
+      state.botChatInput = "";
+      state.botReplyInputs = {};
+      state.botReplyOpen = {};
       state.mindPositions = {};
       state.mindPan = { x: 0, y: 0 };
       state.mindZoom = 1;
@@ -1401,6 +1509,12 @@ function attachAppEvents() {
   document.querySelectorAll("[data-flash-text]").forEach((el) => el.addEventListener("click", () => flashSource(el.dataset.flashText, el.dataset.jump)));
   document.querySelectorAll("[data-load-record]").forEach((el) => el.addEventListener("click", () => loadRecord(el.dataset.loadRecord)));
   document.querySelectorAll("[data-del-record]").forEach((el) => el.addEventListener("click", () => { state.records = deleteRecord(el.dataset.delRecord); render(); }));
+  document.querySelector("#botChatInput")?.addEventListener("input", debounce((e) => { state.botChatInput = e.target.value; }, 80));
+  document.querySelector("#botChatAskBtn")?.addEventListener("click", () => runBotChatAsk());
+  document.querySelectorAll("[data-bot-quick]").forEach((el) => el.addEventListener("click", () => runBotChatAsk(el.dataset.botQuick)));
+  document.querySelectorAll("[data-open-bot-reply]").forEach((el) => el.addEventListener("click", () => { const key = el.dataset.openBotReply; state.botReplyOpen[key] = !state.botReplyOpen[key]; render(); }));
+  document.querySelectorAll("[data-bot-reply-input]").forEach((el) => el.addEventListener("input", debounce(() => { state.botReplyInputs[el.dataset.botReplyInput] = el.value; }, 80)));
+  document.querySelectorAll("[data-bot-reply-ask]").forEach((el) => el.addEventListener("click", () => runBotReplyAsk(el.dataset.botReplyAsk)));
   document.querySelector("#closeDrawer")?.addEventListener("click", () => { state.detail = null; render(); });
   document.querySelector("#readerMemoQuestion")?.addEventListener("input", debounce((e) => { state.memoAskInput = e.target.value; }, 80));
   document.querySelector("#readerMemoAskBtn")?.addEventListener("click", () => runReaderMemoAsk());
@@ -1972,6 +2086,130 @@ async function runQuestionAsk(key) {
 
 function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
+
+function getBotThread(threadId) {
+  return (state.botChatThreads || []).find((t) => t.id === threadId) || null;
+}
+
+function findBotComment(comments = [], commentId) {
+  for (const comment of comments) {
+    if (comment.id === commentId) return comment;
+    for (const rt of ensureArray(comment.replyThreads)) {
+      const found = findBotComment(rt.comments || [], commentId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function normalizeBotComments(comments = [], parentId = "") {
+  const personas = ["헤헤파", "근거봇", "츤데레", "소크라봇", "정직한애", "반박요정", "정리충", "오답감지기"];
+  return ensureArray(comments).slice(0, 8).map((c, index) => ({
+    id: c?.id || uid("bot"),
+    author: String(c?.author || personas[index % personas.length]).slice(0, 16),
+    persona: String(c?.persona || personas[index % personas.length]).slice(0, 20),
+    text: shorten(String(c?.text || "지문 근거를 다시 확인해 보자.").replace(/\s+/g, " "), 120),
+    sourcePointer: shorten(String(c?.sourcePointer || ""), 90),
+    parentId,
+    replyThreads: ensureArray(c?.replyThreads)
+  }));
+}
+
+async function runBotChatAsk(quickQuestion = "") {
+  if (!state.analysis) return notify("info", "분석 결과가 없습니다", "먼저 지문을 분석한 뒤 AI 댓글 친구들을 불러 주세요.");
+  const question = (quickQuestion || document.querySelector("#botChatInput")?.value || state.botChatInput || "").trim();
+  if (!question) return notify("info", "질문이 비어 있습니다", "질문을 직접 입력하거나 예상 질문 버튼을 눌러 주세요.");
+  return runExclusive("botChatAsk", async () => {
+    const apiKey = getApiKey();
+    if (!state.demoMode && !apiKey) return notify("error", "API 키가 없습니다", "AI 댓글 기능은 API 키를 사용합니다. 설정 메뉴에서 키를 입력해 주세요.");
+    state.botChatLoading = true;
+    state.tab = "saved";
+    render();
+    try {
+      let result;
+      if (state.demoMode) {
+        await delay(450);
+        result = createDemoBotComments(question, false);
+      } else {
+        result = await askChatBots({
+          apiKey,
+          model: state.gradingModel || state.model,
+          passage: state.passage,
+          analysis: state.analysis,
+          userQuestion: question,
+          parentComment: null,
+          replyMode: false
+        });
+      }
+      state.botChatThreads.unshift({
+        id: uid("thread"),
+        question,
+        createdAt: Date.now(),
+        comments: normalizeBotComments(result.comments || [])
+      });
+      state.botChatInput = "";
+    } catch (error) {
+      notify("error", "AI 댓글 생성 실패", error.message || "알 수 없는 오류가 발생했습니다.", error.stack || String(error));
+    } finally {
+      state.botChatLoading = false;
+      render();
+    }
+  });
+}
+
+async function runBotReplyAsk(key) {
+  const [threadId, commentId] = String(key || "").split(":");
+  const thread = getBotThread(threadId);
+  const parent = thread ? findBotComment(thread.comments || [], commentId) : null;
+  const question = (document.querySelector(`[data-bot-reply-input="${cssEscape(key)}"]`)?.value || state.botReplyInputs[key] || "").trim();
+  if (!thread || !parent) return notify("error", "댓글을 찾을 수 없습니다", "페이지를 새로고침한 뒤 다시 시도해 주세요.");
+  if (!question) return notify("info", "질문이 비어 있습니다", "답글에 이어서 물어볼 내용을 적어 주세요.");
+  return runExclusive(`botReply:${key}`, async () => {
+    const apiKey = getApiKey();
+    if (!state.demoMode && !apiKey) return notify("error", "API 키가 없습니다", "AI 댓글 기능은 API 키를 사용합니다. 설정 메뉴에서 키를 입력해 주세요.");
+    state.botReplyLoading = key;
+    render();
+    try {
+      let result;
+      if (state.demoMode) {
+        await delay(350);
+        result = createDemoBotComments(question, true);
+      } else {
+        result = await askChatBots({
+          apiKey,
+          model: state.gradingModel || state.model,
+          passage: state.passage,
+          analysis: state.analysis,
+          userQuestion: question,
+          parentComment: parent,
+          replyMode: true
+        });
+      }
+      parent.replyThreads = ensureArray(parent.replyThreads);
+      parent.replyThreads.push({ id: uid("reply"), question, comments: normalizeBotComments(result.comments || [], parent.id).slice(0, 2) });
+      state.botReplyInputs[key] = "";
+    } catch (error) {
+      notify("error", "답글 생성 실패", error.message || "알 수 없는 오류가 발생했습니다.", error.stack || String(error));
+    } finally {
+      state.botReplyLoading = null;
+      render();
+    }
+  });
+}
+
+function createDemoBotComments(question, replyMode = false) {
+  const base = replyMode ? [
+    { author: "근거만봄", persona: "근거봇", text: "그 질문은 앞 문단의 조건을 같이 봐야 해. 단어만 보면 반대로 읽히기 쉬워.", sourcePointer: "관련 문단의 조건·결론 연결" },
+    { author: "헤헤독해", persona: "헤헤파", text: "헤헤, 지금 헷갈린 건 개념이 아니라 방향이야. A가 B를 낳는지부터 보자.", sourcePointer: "인과 관계가 제시된 문장" }
+  ] : [
+    { author: "근거만봄", persona: "근거봇", text: "일단 원문 근거는 정의 문장에 있어. 질문은 그 정의의 범위를 묻는 쪽이야.", sourcePointer: "개념 정의가 나오는 문단" },
+    { author: "츤츤풀이", persona: "츤데레", text: "틀린 질문은 아닌데, 단어 하나만 보면 낚여. 앞뒤 조건을 같이 보라고.", sourcePointer: "조건이 붙은 문장" },
+    { author: "소크라봇", persona: "질문형", text: "그럼 먼저 물어보자. 이 개념은 원인일까, 결과일까? 거기서 선지가 갈려.", sourcePointer: "원인-결과 연결부" },
+    { author: "오답감지기", persona: "함정 담당", text: "문제로 나오면 범위 확대가 함정일 듯. ‘항상’ 같은 말이 붙으면 의심해 봐.", sourcePointer: "한정 표현이 있는 부분" }
+  ];
+  return { comments: base.slice(0, replyMode ? 2 : 4).map((c) => ({ id: uid("bot"), ...c })) };
+}
+
 function saveCurrentRecord() {
   if (!state.analysis) return;
   const record = {
@@ -1986,7 +2224,8 @@ function saveCurrentRecord() {
     userAnswers: state.userAnswers,
     revealAnswers: state.revealAnswers,
     shortGrades: state.shortGrades,
-    qnaMessages: state.qnaMessages
+    qnaMessages: state.qnaMessages,
+    botChatThreads: state.botChatThreads
   };
   state.records = saveRecord(record);
   state.tab = "saved";
@@ -2004,6 +2243,7 @@ function loadRecord(id) {
   state.revealAnswers = record.revealAnswers || { mc: {}, ox: {}, short: {} };
   state.shortGrades = record.shortGrades || {};
   state.qnaMessages = record.qnaMessages || {};
+  state.botChatThreads = ensureArray(record.botChatThreads);
   state.tab = "summary";
   render();
 }
