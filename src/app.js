@@ -496,12 +496,16 @@ function renderHighlightFilters() {
 }
 
 function renderReaderAskCard() {
-  const suggestions = [
+  const fallbackSuggestions = [
     "이 지문에서 제일 헷갈리기 쉬운 논리 연결을 설명해줘",
     "핵심 개념을 쉬운 예시로 설명해줘",
     "문제 선지로 바뀌면 어디가 함정이 될지 알려줘",
     "비교·대조되는 개념을 다시 정리해줘"
   ];
+  const suggestions = (state.analysis?.suggestedReaderQuestions?.length
+    ? state.analysis.suggestedReaderQuestions
+    : fallbackSuggestions
+  ).slice(0, 6);
   return `<div class="reader-ai-card">
     <div class="reader-ai-head">
       <div><b>AI에게 질문하기</b><span>답변은 메모 탭에 저장됩니다${state.selectedText ? ` · 현재 선택: “${escapeHtml(shorten(state.selectedText, 34))}”` : ""}</span></div>
@@ -784,7 +788,7 @@ function renderNotesTab() {
     ${state.noteLoading ? `<div class="mini-loader"><span></span><b>선택 구절과 단락을 읽고 있습니다</b></div>` : ""}
   </div>` : `<div class="empty">지문에서 이해가 안 되는 부분을 드래그하거나, 본문 위의 AI 질문 카드를 사용하면 답변이 이곳에 저장됩니다.</div>`;
 
-  return `<div class="kv">
+  return `<div class="kv memo-tab-shell">
     ${selectedCard}
     ${state.memoAskLoading && !state.selectedText ? `<div class="card"><div class="mini-loader"><span></span><b>메모 답변을 생성 중입니다</b></div></div>` : ""}
     ${state.notes.map((n) => renderMemoCard(n)).join("")}
@@ -797,7 +801,7 @@ function renderMemoCard(n) {
   const inputValue = state.memoFollowInputs[n.id] || "";
   const loading = state.memoFollowLoading === n.id;
   return `<div class="card memo-card" data-note-id="${escapeHtml(n.id)}">
-    <div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt).toLocaleString())}</span><span class="memo-source">${escapeHtml(n.selectedText || "지문 질문")}</span></div>
+    <div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt).toLocaleString())}</span><span class="memo-source" title="${escapeHtml(n.selectedText || "지문 질문")}">${escapeHtml(shorten(n.selectedText || "지문 질문", 70))}</span></div>
     ${n.question ? `<p class="memo-question"><b>Q.</b> ${escapeHtml(n.question)}</p>` : ""}
     <p class="memo-answer">${escapeHtml(n.explanation?.simple || n.answer || "")}</p>
     ${n.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(n.sourcePointer)}</p>` : ""}

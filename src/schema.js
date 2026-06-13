@@ -16,7 +16,8 @@ export const ANALYSIS_SCHEMA = {
     "glossary",
     "trickySentences",
     "mindmap",
-    "studyTips"
+    "studyTips",
+    "suggestedReaderQuestions"
   ],
   properties: {
     cleanedPassage: { type: "string" },
@@ -178,7 +179,8 @@ export const ANALYSIS_SCHEMA = {
         }
       }
     },
-    studyTips: { type: "array", items: { type: "string" } }
+    studyTips: { type: "array", items: { type: "string" } },
+    suggestedReaderQuestions: { type: "array", items: { type: "string" } }
   }
 };
 

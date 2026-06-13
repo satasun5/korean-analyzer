@@ -994,3 +994,61 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   color: var(--text);
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* v2.5 memo layout and AI question card refinements */
+.tab-content { min-width: 0; overflow-x: hidden; }
+.kv, .card, .memo-tab-shell, .memo-card, .memo-compose-card, .reader-ai-card { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.memo-tab-shell { overflow-x: hidden; }
+.memo-tab-shell .empty {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+  line-height: 1.7;
+  text-align: center;
+}
+.reader-ai-card {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(79,70,229,.075), rgba(6,182,212,.055));
+}
+.reader-ai-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+}
+.reader-ai-card > * { position: relative; }
+.memo-card { overflow: hidden; }
+.memo-card .memo-head {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.memo-source {
+  flex: 1 1 220px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.45;
+  text-align: right;
+}
+.memo-question, .memo-answer, .memo-thread, .source-line, .qna-message {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+.memo-inline {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.memo-inline .input { min-width: 0; }
+@media (max-width: 720px) {
+  .memo-inline { grid-template-columns: 1fr; }
+  .memo-source { text-align: left; flex-basis: 100%; }
+}
