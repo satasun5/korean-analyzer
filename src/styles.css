@@ -10,6 +10,8 @@
   --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.08);
   --accent: #4f46e5;
   --accent-2: #06b6d4;
+  --accent-soft: rgba(79, 70, 229, 0.08);
+  --soft: rgba(248, 250, 252, 0.9);
   --danger: #ef4444;
   --ok: #10b981;
   --radius-xl: 28px;
@@ -37,6 +39,8 @@
   --shadow-soft: 0 10px 32px rgba(0, 0, 0, 0.25);
   --accent: #818cf8;
   --accent-2: #22d3ee;
+  --accent-soft: rgba(129, 140, 248, 0.13);
+  --soft: rgba(15, 23, 42, 0.72);
   --claim: rgba(250, 204, 21, .46);
   --evidence: rgba(52, 211, 153, .34);
   --contrast: rgba(96, 165, 250, .34);
@@ -877,3 +881,116 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   .top-actions { gap:6px; }
   .top-actions #newNoteBtn { order:3; width:100%; }
 }
+
+/* v2.4 memo question card */
+.reader-ai-card {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--card) 86%, var(--accent-soft));
+  box-shadow: var(--shadow-soft);
+}
+.reader-ai-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.reader-ai-head b { color: var(--text); font-size: 16px; }
+.reader-ai-head span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.suggestion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.suggestion-row.compact { margin-top: 14px; }
+.suggestion-chip {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform .18s ease-in-out, border-color .18s ease-in-out, background .18s ease-in-out;
+}
+.suggestion-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.memo-inline { margin-top: 8px; }
+.tiny-loader {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.tiny-loader span,
+.mini-loader span {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.memo-compose-card .selected-quote {
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--soft);
+  color: var(--text);
+  line-height: 1.7;
+}
+.memo-card .memo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.memo-source {
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70%;
+}
+.memo-question {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  color: var(--text);
+  line-height: 1.65;
+}
+.memo-answer {
+  margin-top: 10px;
+  color: var(--text);
+  line-height: 1.85;
+  font-size: 15px;
+}
+.memo-thread {
+  margin-top: 14px;
+  padding: 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: 14px;
+  background: var(--soft);
+}
+.memo-thread p {
+  margin: 6px 0;
+  line-height: 1.7;
+  color: var(--text);
+}
+@keyframes spin { to { transform: rotate(360deg); } }

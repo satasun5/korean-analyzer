@@ -1,4 +1,4 @@
-import { analyzePassage, generateQuestions, explainSelection, askAboutQuestion, cleanupPassageWithAi, gradeShortAnswer, gradeShortAnswersBatch } from "./ai.js";
+import { analyzePassage, generateQuestions, explainSelection, askAboutQuestion, cleanupPassageWithAi, gradeShortAnswer, gradeShortAnswersBatch, askAboutMemo } from "./ai.js";
 import { createDemoAnalysis, createDemoQuestions, SAMPLE_PASSAGE } from "./sample.js";
 import { loadRecords, saveRecord, deleteRecord, loadSettings, saveSettings } from "./storage.js";
 
@@ -60,6 +60,11 @@ const state = {
   logs: [],
   logOpen: false,
   noteLoading: false,
+  memoAskInput: "",
+  selectedMemoInput: "",
+  memoAskLoading: false,
+  memoFollowInputs: {},
+  memoFollowLoading: null,
   flash: null,
   userAnswers: { mc: {}, ox: {}, short: {} },
   revealAnswers: { mc: {}, ox: {}, short: {} },
@@ -146,6 +151,11 @@ function escapeHtml(value = "") {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function shorten(value = "", max = 80) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 function escapeRegExp(value = "") {
@@ -368,6 +378,7 @@ function renderReaderPanel() {
         ${renderInputGuide(hasAnalysis)}
         ${state.loading && state.loading !== "questions" ? renderLoading() : ""}
         ${hasAnalysis ? renderHighlightFilters() : ""}
+        ${hasAnalysis ? renderReaderAskCard() : ""}
         <div style="height: 12px"></div>
         ${hasAnalysis ? renderReaderContent() : renderEditor()}
       </div>
@@ -482,6 +493,26 @@ function renderHighlightFilters() {
         <button class="chip ${state.filters[key] ? "" : "off"}" data-filter="${key}"><span class="dot ${key}"></span>${label}</button>
       `).join("")}
     </div>`;
+}
+
+function renderReaderAskCard() {
+  const suggestions = [
+    "이 지문에서 제일 헷갈리기 쉬운 논리 연결을 설명해줘",
+    "핵심 개념을 쉬운 예시로 설명해줘",
+    "문제 선지로 바뀌면 어디가 함정이 될지 알려줘",
+    "비교·대조되는 개념을 다시 정리해줘"
+  ];
+  return `<div class="reader-ai-card">
+    <div class="reader-ai-head">
+      <div><b>AI에게 질문하기</b><span>답변은 메모 탭에 저장됩니다${state.selectedText ? ` · 현재 선택: “${escapeHtml(shorten(state.selectedText, 34))}”` : ""}</span></div>
+      ${state.memoAskLoading ? `<div class="tiny-loader"><span></span>답변 작성 중</div>` : ""}
+    </div>
+    <div class="suggestion-row">${suggestions.map((q) => `<button class="suggestion-chip" data-reader-quick="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>
+    <div class="inline-control memo-inline">
+      <input class="input" id="readerMemoQuestion" value="${escapeHtml(state.memoAskInput || "")}" placeholder="지문에 대해 궁금한 점을 물어보세요. 예: 이 부분 예시 들어줘, 더 쉽게 설명해줘" />
+      <button class="btn small primary" id="readerMemoAskBtn" ${state.memoAskLoading ? "disabled" : ""}>질문</button>
+    </div>
+  </div>`;
 }
 
 function renderReaderContent() {
@@ -735,10 +766,48 @@ function renderWeakness() {
 }
 
 function renderNotesTab() {
+  const quicks = [
+    "더 쉽게 다시 설명해줘",
+    "예시를 만들어줘",
+    "이 부분이 왜 중요한지 알려줘",
+    "선지로 나오면 어떻게 바뀔 수 있어?"
+  ];
+  const selectedCard = state.selectedText ? `<div class="card memo-compose-card">
+    <h4>선택한 구절</h4>
+    <p class="selected-quote">“${escapeHtml(state.selectedText)}”</p>
+    <div class="suggestion-row">${quicks.map((q) => `<button class="suggestion-chip" data-selected-quick="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>
+    <div class="inline-control memo-inline">
+      <input class="input" id="selectedMemoQuestion" value="${escapeHtml(state.selectedMemoInput || "")}" placeholder="추가로 묻고 싶은 내용을 적어도 됩니다. 비워두면 해당 구절과 단락을 자세히 설명합니다." />
+      <button class="btn small primary" id="selectedMemoAskBtn" ${state.noteLoading ? "disabled" : ""}>질문</button>
+    </div>
+    <button class="btn full" id="explainSelectionBtn" style="margin-top:10px" ${state.noteLoading ? "disabled" : ""}>${state.noteLoading ? "설명 생성 중..." : "질문 없이 자세한 설명 만들기"}</button>
+    ${state.noteLoading ? `<div class="mini-loader"><span></span><b>선택 구절과 단락을 읽고 있습니다</b></div>` : ""}
+  </div>` : `<div class="empty">지문에서 이해가 안 되는 부분을 드래그하거나, 본문 위의 AI 질문 카드를 사용하면 답변이 이곳에 저장됩니다.</div>`;
+
   return `<div class="kv">
-    ${state.selectedText ? `<div class="card"><h4>선택한 구절</h4><p>“${escapeHtml(state.selectedText)}”</p><button class="btn primary full" id="explainSelectionBtn" style="margin-top:12px" ${state.noteLoading ? "disabled" : ""}>${state.noteLoading ? "설명 생성 중..." : "AI 설명 메모 만들기"}</button>${state.noteLoading ? `<div class="mini-loader"><span></span><b>앞뒤 문맥을 읽고 있습니다</b></div>` : ""}</div>` : `<div class="empty">지문에서 이해가 안 되는 부분을 드래그하면 이곳에 추가 설명을 만들 수 있습니다.</div>`}
-    ${state.noteLoading && !state.selectedText ? `<div class="card"><div class="mini-loader"><span></span><b>AI 설명 메모를 생성 중입니다</b></div></div>` : ""}
-    ${state.notes.map((n) => `<div class="card"><span class="badge">${escapeHtml(new Date(n.createdAt).toLocaleString())}</span><h4>“${escapeHtml(n.selectedText)}”</h4><p><b>쉽게:</b> ${escapeHtml(n.explanation.simple)}</p><p><b>문맥:</b> ${escapeHtml(n.explanation.context)}</p><p><b>시험:</b> ${escapeHtml(n.explanation.testPoint)}</p>${n.explanation.example ? `<p><b>예시:</b> ${escapeHtml(n.explanation.example)}</p>` : ""}</div>`).join("")}
+    ${selectedCard}
+    ${state.memoAskLoading && !state.selectedText ? `<div class="card"><div class="mini-loader"><span></span><b>메모 답변을 생성 중입니다</b></div></div>` : ""}
+    ${state.notes.map((n) => renderMemoCard(n)).join("")}
+  </div>`;
+}
+
+function renderMemoCard(n) {
+  const thread = n.thread || [];
+  const suggestions = n.suggestedQuestions?.length ? n.suggestedQuestions : ["더 쉽게 설명해줘", "예시 들어줘", "오해하기 쉬운 부분을 알려줘"];
+  const inputValue = state.memoFollowInputs[n.id] || "";
+  const loading = state.memoFollowLoading === n.id;
+  return `<div class="card memo-card" data-note-id="${escapeHtml(n.id)}">
+    <div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt).toLocaleString())}</span><span class="memo-source">${escapeHtml(n.selectedText || "지문 질문")}</span></div>
+    ${n.question ? `<p class="memo-question"><b>Q.</b> ${escapeHtml(n.question)}</p>` : ""}
+    <p class="memo-answer">${escapeHtml(n.explanation?.simple || n.answer || "")}</p>
+    ${n.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(n.sourcePointer)}</p>` : ""}
+    ${thread.map((m) => `<div class="memo-thread"><p><b>Q.</b> ${escapeHtml(m.question)}</p><p><b>A.</b> ${escapeHtml(m.answer)}</p>${m.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(m.sourcePointer)}</p>` : ""}</div>`).join("")}
+    <div class="suggestion-row compact">${suggestions.slice(0, 4).map((q) => `<button class="suggestion-chip" data-memo-follow-quick="${escapeHtml(n.id)}" data-question="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>
+    <div class="inline-control memo-inline">
+      <input class="input" data-memo-follow-input="${escapeHtml(n.id)}" value="${escapeHtml(inputValue)}" placeholder="이 메모에 대해 이어서 질문하기" />
+      <button class="btn small" data-memo-follow-ask="${escapeHtml(n.id)}" ${loading ? "disabled" : ""}>${loading ? "답변 중..." : "질문"}</button>
+    </div>
+    ${loading ? `<div class="mini-loader"><span></span><b>이전 메모 맥락을 이어서 답변하고 있습니다</b></div>` : ""}
   </div>`;
 }
 
@@ -1017,6 +1086,15 @@ function attachAppEvents() {
   document.querySelectorAll("[data-load-record]").forEach((el) => el.addEventListener("click", () => loadRecord(el.dataset.loadRecord)));
   document.querySelectorAll("[data-del-record]").forEach((el) => el.addEventListener("click", () => { state.records = deleteRecord(el.dataset.delRecord); render(); }));
   document.querySelector("#closeDrawer")?.addEventListener("click", () => { state.detail = null; render(); });
+  document.querySelector("#readerMemoQuestion")?.addEventListener("input", debounce((e) => { state.memoAskInput = e.target.value; }, 80));
+  document.querySelector("#readerMemoAskBtn")?.addEventListener("click", () => runReaderMemoAsk());
+  document.querySelectorAll("[data-reader-quick]").forEach((el) => el.addEventListener("click", () => runReaderMemoAsk(el.dataset.readerQuick)));
+  document.querySelector("#selectedMemoQuestion")?.addEventListener("input", debounce((e) => { state.selectedMemoInput = e.target.value; }, 80));
+  document.querySelector("#selectedMemoAskBtn")?.addEventListener("click", () => runSelectionQuestion());
+  document.querySelectorAll("[data-selected-quick]").forEach((el) => el.addEventListener("click", () => runSelectionQuestion(el.dataset.selectedQuick)));
+  document.querySelectorAll("[data-memo-follow-input]").forEach((el) => el.addEventListener("input", debounce(() => { state.memoFollowInputs[el.dataset.memoFollowInput] = el.value; }, 80)));
+  document.querySelectorAll("[data-memo-follow-ask]").forEach((el) => el.addEventListener("click", () => runMemoFollowAsk(el.dataset.memoFollowAsk)));
+  document.querySelectorAll("[data-memo-follow-quick]").forEach((el) => el.addEventListener("click", () => runMemoFollowAsk(el.dataset.memoFollowQuick, el.dataset.question)));
   document.querySelector("#explainSelectionBtn")?.addEventListener("click", runSelectionExplain);
   document.querySelector("#closeLogPanel")?.addEventListener("click", () => { state.logOpen = false; render(); });
   document.querySelector("#logBackdrop")?.addEventListener("click", () => { state.logOpen = false; render(); });
@@ -1192,10 +1270,7 @@ async function runSelectionExplain() {
     if (state.demoMode) {
       await delay(450);
       explanation = {
-        simple: `“${selectedText}”은 글의 핵심 흐름에서 중요한 연결 고리입니다.`,
-        context: "앞뒤 문단의 주장과 근거를 이어 주는 표현으로 보면 이해하기 쉽습니다.",
-        testPoint: "선지에서 의미를 반대로 바꾸거나 범위를 과장하는 방식으로 출제될 수 있습니다.",
-        example: "어떤 앱이 편리하지만 선택 폭을 줄이는 경우처럼, 장점과 한계를 함께 보라는 뜻입니다."
+        simple: `“${selectedText}”은 글의 핵심 흐름에서 중요한 연결 고리입니다. 이 구절은 단독으로 외울 문장이 아니라, 앞에서 나온 개념을 뒤의 주장이나 결론과 이어 주는 역할을 합니다. 따라서 이 부분을 읽을 때는 ‘무엇을 설명하는가’보다 ‘앞뒤 내용의 관계가 어떻게 바뀌는가’를 보는 것이 좋습니다.`
       };
     } else {
       explanation = await explainSelection({
@@ -1208,13 +1283,145 @@ async function runSelectionExplain() {
         memoContext: existing
       });
     }
-    state.notes.unshift({ id: uid("note"), selectedText, explanation, createdAt: Date.now() });
+    state.notes.unshift({ id: uid("note"), selectedText, question: "", explanation, sourcePointer: selectedText, suggestedQuestions: ["더 쉽게 다시 설명해줘", "예시를 만들어줘", "문제 선지로 바뀌면 어떻게 돼?"], thread: [], createdAt: Date.now() });
     state.selectedText = "";
     state.tab = "notes";
   } catch (error) {
     notify("error", "설명 생성 실패", error.message || "알 수 없는 오류가 발생했습니다.", error.stack || String(error));
   } finally {
     state.noteLoading = false;
+    render();
+  }
+}
+
+
+function getMemoQuestionFromInput(selector, fallback = "") {
+  const value = document.querySelector(selector)?.value ?? fallback ?? "";
+  return String(value).trim();
+}
+
+async function runReaderMemoAsk(quickQuestion = "") {
+  if (!state.analysis) return notify("info", "아직 분석 결과가 없습니다", "먼저 지문을 분석한 뒤 질문해 주세요.");
+  const question = quickQuestion || getMemoQuestionFromInput("#readerMemoQuestion", state.memoAskInput);
+  if (!question) return notify("info", "질문이 비어 있습니다", "예상 질문 버튼을 누르거나 궁금한 점을 적어 주세요.");
+  await createMemoAnswer({
+    selectedText: state.selectedText || "",
+    question,
+    source: "reader"
+  });
+  state.memoAskInput = "";
+}
+
+async function runSelectionQuestion(quickQuestion = "") {
+  if (!state.selectedText) return notify("info", "선택한 구절이 없습니다", "먼저 지문에서 궁금한 구절을 드래그해 주세요.");
+  const question = quickQuestion || getMemoQuestionFromInput("#selectedMemoQuestion", state.selectedMemoInput);
+  if (!question) return runSelectionExplain();
+  await createMemoAnswer({
+    selectedText: state.selectedText,
+    question,
+    source: "selection"
+  });
+  state.selectedMemoInput = "";
+}
+
+async function createMemoAnswer({ selectedText = "", question = "", source = "reader" }) {
+  const apiKey = getApiKey();
+  if (!state.demoMode && !apiKey) {
+    notify("error", "API 키가 없습니다", "설정 메뉴에서 API 키를 붙여넣고 '키 적용'을 눌러 주세요.", "apiKey is empty and demoMode is off");
+    return;
+  }
+  state.memoAskLoading = source === "reader";
+  state.noteLoading = source === "selection";
+  if (state.tab === "notes" || source === "reader") render();
+  try {
+    let result;
+    if (state.demoMode) {
+      await delay(450);
+      result = {
+        answer: question.includes("예시")
+          ? "예를 들어 어떤 글에서 ‘겉으로는 불편해 보이는 조건’이 오히려 주인공이 자신을 돌아보게 하는 계기가 된다면, 그 조건은 단순한 방해물이 아니라 성찰의 출발점으로 읽을 수 있습니다. 이 지문에서도 선택한 구절은 그런 식으로 앞뒤 논리를 이어 주는 역할을 합니다."
+          : "이 질문은 지문의 핵심 개념이 서로 어떻게 이어지는지를 묻고 있습니다. 선택한 구절은 단독으로 외울 문장이 아니라, 앞의 개념을 뒤의 결론으로 넘겨 주는 연결부로 읽어야 합니다. 그래서 단어 하나보다 관계와 방향을 보는 것이 중요합니다.",
+        sourcePointer: selectedText ? `선택 구절: ${shorten(selectedText, 80)}` : "지문 전체",
+        suggestedQuestions: ["더 쉽게 다시 설명해줘", "예시를 하나 더 들어줘", "문제 선지로 바뀌면 어떻게 돼?"]
+      };
+    } else {
+      result = await askAboutMemo({
+        apiKey,
+        model: state.useReasoning ? state.reasoningModel : state.model,
+        reasoningMode: state.useReasoning,
+        reasoningEffort: state.reasoningEffort,
+        passage: state.passage,
+        selectedText,
+        userQuestion: question,
+        memoThread: []
+      });
+    }
+    state.notes.unshift({
+      id: uid("note"),
+      selectedText: selectedText || "지문 전체 질문",
+      question,
+      explanation: { simple: result.answer },
+      sourcePointer: result.sourcePointer || "",
+      suggestedQuestions: result.suggestedQuestions || [],
+      thread: [],
+      createdAt: Date.now()
+    });
+    if (source === "selection") state.selectedText = "";
+    state.tab = "notes";
+  } catch (error) {
+    notify("error", "메모 질문 실패", error.message || "알 수 없는 오류가 발생했습니다.", error.stack || String(error));
+  } finally {
+    state.memoAskLoading = false;
+    state.noteLoading = false;
+    render();
+  }
+}
+
+async function runMemoFollowAsk(noteId, quickQuestion = "") {
+  const note = state.notes.find((n) => n.id === noteId);
+  if (!note) return notify("error", "메모를 찾지 못했습니다", "이어 질문할 메모가 없습니다.", `note not found: ${noteId}`);
+  const question = quickQuestion || getMemoQuestionFromInput(`[data-memo-follow-input="${CSS.escape(noteId)}"]`, state.memoFollowInputs[noteId]);
+  if (!question) return notify("info", "질문이 비어 있습니다", "이어 묻고 싶은 내용을 적어 주세요.");
+  const apiKey = getApiKey();
+  if (!state.demoMode && !apiKey) {
+    notify("error", "API 키가 없습니다", "설정 메뉴에서 API 키를 붙여넣고 '키 적용'을 눌러 주세요.", "apiKey is empty and demoMode is off");
+    return;
+  }
+  state.memoFollowLoading = noteId;
+  render();
+  try {
+    const memoThread = [
+      { question: note.question || "처음 설명", answer: note.explanation?.simple || "" },
+      ...(note.thread || []).map((m) => ({ question: m.question, answer: m.answer }))
+    ];
+    let result;
+    if (state.demoMode) {
+      await delay(450);
+      result = {
+        answer: "방금 메모의 흐름을 이어서 보면, 핵심은 선택 구절을 혼자 떼어 읽지 말고 앞뒤 개념과의 관계로 보는 것입니다. 질문한 내용은 이 관계를 더 쉬운 말로 바꾸거나 예시로 확장하는 방식으로 이해하면 됩니다.",
+        sourcePointer: note.sourcePointer || note.selectedText || "기존 메모",
+        suggestedQuestions: ["더 짧게 요약해줘", "반대로 오해하면 어떻게 돼?", "예시를 바꿔줘"]
+      };
+    } else {
+      result = await askAboutMemo({
+        apiKey,
+        model: state.useReasoning ? state.reasoningModel : state.model,
+        reasoningMode: state.useReasoning,
+        reasoningEffort: state.reasoningEffort,
+        passage: state.passage,
+        selectedText: note.selectedText,
+        userQuestion: question,
+        memoThread
+      });
+    }
+    if (!note.thread) note.thread = [];
+    note.thread.push({ question, answer: result.answer, sourcePointer: result.sourcePointer || "", createdAt: Date.now() });
+    note.suggestedQuestions = result.suggestedQuestions || note.suggestedQuestions || [];
+    state.memoFollowInputs[noteId] = "";
+  } catch (error) {
+    notify("error", "이어 질문 실패", error.message || "알 수 없는 오류가 발생했습니다.", error.stack || String(error));
+  } finally {
+    state.memoFollowLoading = null;
     render();
   }
 }

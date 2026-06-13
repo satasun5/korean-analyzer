@@ -13,7 +13,9 @@ import {
   CLEANUP_INSTRUCTIONS,
   buildCleanupPrompt,
   BATCH_SHORT_GRADING_INSTRUCTIONS,
-  buildBatchShortGradingPrompt
+  buildBatchShortGradingPrompt,
+  MEMO_ASSIST_INSTRUCTIONS,
+  buildMemoAssistPrompt
 } from "./prompts.js";
 
 const ENDPOINT = "https://api.openai.com/v1/responses";
@@ -168,12 +170,9 @@ export async function explainSelection({ apiKey, model, reasoningMode, reasoning
   const schema = {
     type: "object",
     additionalProperties: false,
-    required: ["simple", "context", "testPoint", "example"],
+    required: ["simple"],
     properties: {
-      simple: { type: "string" },
-      context: { type: "string" },
-      testPoint: { type: "string" },
-      example: { type: "string" }
+      simple: { type: "string" }
     }
   };
   return callResponses({
@@ -251,6 +250,29 @@ export async function gradeShortAnswersBatch({ apiKey, model, passage, items }) 
     prompt: buildBatchShortGradingPrompt({ passage, items }),
     schema,
     schemaName: "batch_short_grading"
+  });
+}
+
+export async function askAboutMemo({ apiKey, model, reasoningMode, reasoningEffort, passage, selectedText, userQuestion, memoThread }) {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["answer", "sourcePointer", "suggestedQuestions"],
+    properties: {
+      answer: { type: "string" },
+      sourcePointer: { type: "string" },
+      suggestedQuestions: { type: "array", items: { type: "string" } }
+    }
+  };
+  return callResponses({
+    apiKey,
+    model,
+    reasoningMode,
+    reasoningEffort,
+    instructions: MEMO_ASSIST_INSTRUCTIONS,
+    prompt: buildMemoAssistPrompt({ passage, selectedText, userQuestion, memoThread }),
+    schema,
+    schemaName: "memo_assist"
   });
 }
 
