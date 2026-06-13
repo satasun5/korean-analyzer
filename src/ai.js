@@ -101,24 +101,46 @@ async function callResponses({ apiKey, model, instructions, prompt, schema, sche
     body.temperature = 0.35;
   }
 
-  const response = await fetch(ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(body)
-  });
+  let response;
+  try {
+    response = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    throw new Error(`네트워크 요청 실패: ${error?.message || error}`);
+  }
 
-  const data = await response.json().catch(() => ({}));
+  const raw = await response.text().catch(() => "");
+  let data = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = { raw };
+    }
+  }
+
   if (!response.ok) {
-    const message = data?.error?.message || `${response.status} ${response.statusText}`;
+    const message = data?.error?.message || data?.raw?.slice?.(0, 500) || `${response.status} ${response.statusText}`;
     throw new Error(message);
   }
 
   const text = extractOutputText(data);
-  if (!text) throw new Error("모델 응답에서 텍스트를 찾지 못했습니다.");
-  return parseJson(text);
+  if (!text) {
+    const preview = raw ? raw.slice(0, 500) : "empty response";
+    throw new Error(`모델 응답에서 텍스트를 찾지 못했습니다. 응답 미리보기: ${preview}`);
+  }
+  try {
+    return parseJson(text);
+  } catch (error) {
+    const preview = text.slice(0, 800);
+    throw new Error(`모델 JSON 파싱 실패: ${error.message}. 응답 미리보기: ${preview}`);
+  }
 }
 
 export async function analyzePassage({ apiKey, model, reasoningMode, reasoningEffort, passage }) {

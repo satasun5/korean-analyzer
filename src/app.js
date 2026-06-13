@@ -153,6 +153,90 @@ function escapeHtml(value = "") {
     .replaceAll("'", "&#039;");
 }
 
+
+function formatInlineMarkdown(value = "") {
+  let html = escapeHtml(value);
+  html = html.replace(/`([^`]{1,160})`/g, '<code>$1</code>');
+  html = html.replace(/\*\*([^*]{1,280})\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__([^_]{1,280})__/g, '<strong>$1</strong>');
+  return html;
+}
+
+function renderMarkdownText(value = "") {
+  const raw = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/^```(?:markdown|md|text)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  if (!raw) return `<div class="rich-markdown muted">내용이 없습니다.</div>`;
+
+  const lines = raw.split("\n");
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    blocks.push(`<p>${formatInlineMarkdown(paragraph.join(" ").replace(/\s+/g, " ").trim())}</p>`);
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!list) return;
+    const tag = list.type === "ol" ? "ol" : "ul";
+    blocks.push(`<${tag}>${list.items.map((item) => `<li>${formatInlineMarkdown(item)}</li>`).join("")}</${tag}>`);
+    list = null;
+  }
+
+  for (const originalLine of lines) {
+    const line = originalLine.trim();
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    if (/^[-*_]{3,}$/.test(line)) {
+      flushParagraph();
+      flushList();
+      blocks.push("<hr>");
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(4, heading[1].length);
+      blocks.push(`<h${level + 2}>${formatInlineMarkdown(heading[2])}</h${level + 2}>`);
+      continue;
+    }
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      if (!list || list.type !== "ul") {
+        flushList();
+        list = { type: "ul", items: [] };
+      }
+      list.items.push(bullet[1]);
+      continue;
+    }
+    const numbered = line.match(/^\d+[.)]\s+(.+)$/);
+    if (numbered) {
+      flushParagraph();
+      if (!list || list.type !== "ol") {
+        flushList();
+        list = { type: "ol", items: [] };
+      }
+      list.items.push(numbered[1]);
+      continue;
+    }
+    flushList();
+    paragraph.push(line);
+  }
+  flushParagraph();
+  flushList();
+  return `<div class="rich-markdown">${blocks.join("")}</div>`;
+}
+
 function shorten(value = "", max = 80) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max)}…` : text;
@@ -211,6 +295,224 @@ function difficultyLabel(score) {
 
 function normalizeChoiceNumber(n) {
   return ["①", "②", "③", "④", "⑤"][Number(n) - 1] || String(n);
+}
+
+const VALID_HIGHLIGHT_COLORS = new Set(Object.keys(HIGHLIGHT_LABELS));
+
+function ensureArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function safeCssEscape(value = "") {
+  if (globalThis.CSS && typeof CSS.escape === "function") return CSS.escape(String(value));
+  return String(value).replace(/[^a-zA-Z0-9_\-]/g, "\\$&");
+}
+
+function clampScore(value, min = 1, max = 5) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return clamp(n, min, max);
+}
+
+function normalizeAnalysisResult(raw = {}, passage = state.passage) {
+  const a = structuredCloneSafe(raw || {});
+  const fallbackParagraphs = normalizeOcrText(passage || "")
+    .split(/\n\s*\n/g)
+    .map((text, i) => ({
+      id: `p${i + 1}`,
+      index: i + 1,
+      role: i === 0 ? "도입" : "전개",
+      summary: shorten(text, 130),
+      coreClaim: shorten(text, 120),
+      keywords: [],
+      connections: []
+    }))
+    .filter((p) => p.summary);
+
+  a.cleanedPassage = String(a.cleanedPassage || passage || "").trim();
+  a.title = String(a.title || "무제 분석");
+  a.field = String(a.field || "국어 지문");
+  a.overallSummary = String(a.overallSummary || "분석 요약이 없습니다.");
+  a.readingGuide = String(a.readingGuide || "문단별 핵심어와 연결 관계를 중심으로 읽어 보세요.");
+  a.difficulty = a.difficulty && typeof a.difficulty === "object" ? a.difficulty : {};
+  a.difficulty.score = clampScore(a.difficulty.score ?? 2.5);
+  a.difficulty.level = String(a.difficulty.level || difficultyLabel(a.difficulty.score));
+  a.difficulty.reason = String(a.difficulty.reason || "난이도 사유가 없습니다.");
+  a.difficulty.criteria = ensureArray(a.difficulty.criteria).slice(0, 5).map((c, i) => ({
+    name: String(c?.name || ["개념 밀도", "문장 난도", "구조 복잡도", "추론 요구도", "선지 함정 가능성"][i] || `기준 ${i + 1}`),
+    score: clampScore(c?.score ?? a.difficulty.score),
+    reason: String(c?.reason || "세부 평가가 없습니다.")
+  }));
+  while (a.difficulty.criteria.length < 5) {
+    const i = a.difficulty.criteria.length;
+    a.difficulty.criteria.push({ name: ["개념 밀도", "문장 난도", "구조 복잡도", "추론 요구도", "선지 함정 가능성"][i], score: a.difficulty.score, reason: "자동 보정된 평가 기준입니다." });
+  }
+  a.difficulty.trapPoints = ensureArray(a.difficulty.trapPoints).map(String).filter(Boolean).slice(0, 8);
+
+  a.paragraphs = ensureArray(a.paragraphs).length ? ensureArray(a.paragraphs) : fallbackParagraphs;
+  a.paragraphs = a.paragraphs.map((p, i) => ({
+    id: String(p?.id || `p${i + 1}`),
+    index: Number(p?.index || i + 1),
+    role: String(p?.role || "문단 역할"),
+    summary: String(p?.summary || "문단 요약이 없습니다."),
+    coreClaim: String(p?.coreClaim || p?.summary || "핵심 내용이 없습니다."),
+    keywords: ensureArray(p?.keywords).map(String).filter(Boolean),
+    connections: ensureArray(p?.connections).map(String).filter(Boolean)
+  }));
+
+  a.flow = ensureArray(a.flow).map(String).filter(Boolean);
+  if (!a.flow.length) a.flow = a.paragraphs.map((p) => p.role).filter(Boolean).slice(0, 6);
+  a.structureTimeline = ensureArray(a.structureTimeline).map((item, i) => ({
+    label: String(item?.label || a.paragraphs[i]?.role || `구조 ${i + 1}`),
+    paragraphIds: ensureArray(item?.paragraphIds).map(String).filter(Boolean),
+    description: String(item?.description || a.paragraphs[i]?.summary || "구조 설명이 없습니다.")
+  }));
+  if (!a.structureTimeline.length) {
+    a.structureTimeline = a.paragraphs.map((p) => ({ label: p.role, paragraphIds: [p.id], description: p.summary }));
+  }
+
+  a.highlights = ensureArray(a.highlights).map((h, i) => ({
+    id: String(h?.id || `h${i + 1}`),
+    paragraphId: String(h?.paragraphId || a.paragraphs[0]?.id || "p1"),
+    text: sanitizeHighlightText(h?.text || ""),
+    type: String(h?.type || HIGHLIGHT_LABELS[h?.color] || "핵심"),
+    color: VALID_HIGHLIGHT_COLORS.has(h?.color) ? h.color : "claim",
+    shortReason: String(h?.shortReason || "이 구절은 지문 구조를 판단하는 데 필요합니다."),
+    detail: String(h?.detail || h?.shortReason || "이 구절이 앞뒤 내용과 어떻게 연결되는지 확인해 보세요.")
+  })).filter((h) => h.text && h.text.length < 220);
+
+  a.comparisons = ensureArray(a.comparisons).map((c, i) => ({
+    id: String(c?.id || `c${i + 1}`),
+    axis: String(c?.axis || "비교 기준"),
+    a: String(c?.a || "A"),
+    b: String(c?.b || "B"),
+    meaning: String(c?.meaning || "두 개념의 차이를 확인하세요."),
+    paragraphIds: ensureArray(c?.paragraphIds).map(String).filter(Boolean),
+    sourceDetail: String(c?.sourceDetail || "")
+  }));
+  a.glossary = ensureArray(a.glossary).map((g) => ({
+    term: String(g?.term || "개념"),
+    meaning: String(g?.meaning || "개념 설명이 없습니다."),
+    inTextMeaning: String(g?.inTextMeaning || g?.meaning || "지문 속 의미가 없습니다."),
+    sourceText: String(g?.sourceText || g?.term || ""),
+    paragraphIds: ensureArray(g?.paragraphIds).map(String).filter(Boolean),
+    easyExample: String(g?.easyExample || "")
+  }));
+  a.trickySentences = ensureArray(a.trickySentences).map((t) => ({
+    sentence: String(t?.sentence || ""),
+    paragraphId: String(t?.paragraphId || ""),
+    whyHard: String(t?.whyHard || ""),
+    easyRewrite: String(t?.easyRewrite || t?.sentence || ""),
+    testPoint: String(t?.testPoint || "")
+  })).filter((t) => t.sentence);
+
+  a.mindmap = a.mindmap && typeof a.mindmap === "object" ? a.mindmap : {};
+  a.mindmap.nodes = ensureArray(a.mindmap.nodes).map((n, i) => ({
+    id: String(n?.id || `n${i + 1}`),
+    label: String(n?.label || `개념 ${i + 1}`),
+    kind: String(n?.kind || (i === 0 ? "center" : "node")),
+    summary: String(n?.summary || "")
+  }));
+  if (!a.mindmap.nodes.length) a.mindmap.nodes = [{ id: "main", label: a.title, kind: "center", summary: a.overallSummary }];
+  const nodeIds = new Set(a.mindmap.nodes.map((n) => n.id));
+  a.mindmap.edges = ensureArray(a.mindmap.edges).map((e) => ({
+    source: String(e?.source || ""),
+    target: String(e?.target || ""),
+    label: String(e?.label || "")
+  })).filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target) && e.source !== e.target);
+  if (!a.mindmap.edges.length && a.mindmap.nodes.length > 1) {
+    const center = a.mindmap.nodes[0].id;
+    a.mindmap.edges = a.mindmap.nodes.slice(1).map((n) => ({ source: center, target: n.id, label: "연결" }));
+  }
+
+  a.studyTips = ensureArray(a.studyTips).map(String).filter(Boolean);
+  a.suggestedReaderQuestions = ensureArray(a.suggestedReaderQuestions).map(String).filter(Boolean).slice(0, 6);
+  if (!a.suggestedReaderQuestions.length) {
+    a.suggestedReaderQuestions = ["이 지문의 핵심 논리 연결을 설명해줘", "핵심 개념을 쉬운 예시로 설명해줘", "문제 선지로 바뀌면 어디가 함정이 될지 알려줘", "비교·대조되는 개념을 정리해줘"];
+  }
+  return a;
+}
+
+function normalizeQuestionSet(raw = {}) {
+  const qset = structuredCloneSafe(raw || {});
+  qset.multipleChoice = ensureArray(qset.multipleChoice).map((q, i) => {
+    const answer = Number(q?.answer || 1);
+    let choices = ensureArray(q?.choices).map((c, ci) => ({
+      number: Number(c?.number || ci + 1),
+      text: String(c?.text || ""),
+      isAnswer: Boolean(c?.isAnswer),
+      explanation: String(c?.explanation || "해설이 없습니다.")
+    })).filter((c) => c.text);
+    choices.sort((a, b) => a.number - b.number);
+    choices = choices.slice(0, 5).map((c, ci) => ({ ...c, number: ci + 1 }));
+    const answerIndex = clamp(Number.isFinite(answer) ? answer : 1, 1, Math.max(1, choices.length));
+    choices = choices.map((c) => ({ ...c, isAnswer: c.number === answerIndex }));
+    while (choices.length < 5) {
+      const n = choices.length + 1;
+      choices.push({ number: n, text: `선지 ${n}`, isAnswer: n === answerIndex, explanation: "자동 보정된 선지입니다." });
+    }
+    return {
+      id: String(q?.id || `mc${i + 1}`),
+      type: String(q?.type || "5지선다"),
+      difficulty: String(q?.difficulty || "중"),
+      sourceIntent: String(q?.sourceIntent || "지문 핵심 관계 확인"),
+      question: String(q?.question || "윗글을 이해한 내용으로 적절한 것은?"),
+      passageExtract: String(q?.passageExtract || ""),
+      viewBox: String(q?.viewBox || ""),
+      choiceDesignFirst: ensureArray(q?.choiceDesignFirst).map((d, di) => ({
+        choiceNumber: Number(d?.choiceNumber || di + 1),
+        plannedRole: String(d?.plannedRole || "선지 역할"),
+        reasonBeforeWritingChoice: String(d?.reasonBeforeWritingChoice || "선지 설계 설명이 없습니다.")
+      })).slice(0, 5),
+      choices,
+      answer: answerIndex,
+      finalExplanation: String(q?.finalExplanation || "해설이 없습니다.")
+    };
+  });
+  qset.ox = ensureArray(qset.ox).map((q, i) => ({
+    id: String(q?.id || `ox${i + 1}`),
+    statement: String(q?.statement || "진술이 없습니다."),
+    answer: String(q?.answer || "O").toUpperCase() === "X" ? "X" : "O",
+    explanation: String(q?.explanation || "해설이 없습니다."),
+    trap: String(q?.trap || "")
+  }));
+  qset.shortAnswer = ensureArray(qset.shortAnswer).map((q, i) => ({
+    id: String(q?.id || `short${i + 1}`),
+    type: String(q?.type || "서술형"),
+    question: String(q?.question || "지문의 핵심 내용을 서술하시오."),
+    idealAnswer: String(q?.idealAnswer || "모범 답안이 없습니다."),
+    gradingPoints: ensureArray(q?.gradingPoints).map(String).filter(Boolean),
+    sampleWrongAnswer: String(q?.sampleWrongAnswer || "")
+  }));
+  qset.weaknessGuide = ensureArray(qset.weaknessGuide).map((w) => ({
+    weakness: String(w?.weakness || "약점"),
+    symptom: String(w?.symptom || ""),
+    howToFix: String(w?.howToFix || "")
+  }));
+  return qset;
+}
+
+function resetQuestionState() {
+  state.userAnswers = { mc: {}, ox: {}, short: {} };
+  state.revealAnswers = { mc: {}, ox: {}, short: {} };
+  state.shortGrades = {};
+  state.shortGradeLoading = {};
+  state.shortGradeConfirm = {};
+  state.qnaInputs = {};
+  state.qnaMessages = {};
+  state.qnaLoading = null;
+  state.qnaOpen = {};
+}
+
+function runExclusive(key, task) {
+  if (state.inFlight[key]) {
+    notify("info", "이미 처리 중입니다", "현재 작업이 끝난 뒤 다시 눌러 주세요.");
+    return Promise.resolve(null);
+  }
+  state.inFlight[key] = true;
+  return Promise.resolve()
+    .then(task)
+    .finally(() => { delete state.inFlight[key]; });
 }
 
 function debounce(fn, delay = 160) {
@@ -761,7 +1063,7 @@ function renderQuestionAskBox(q, type) {
       <button class="btn small" data-qna-ask="${escapeHtml(key)}" ${loading ? "disabled" : ""}>${loading ? "답변 중..." : "질문"}</button>
     </div>
     ${loading ? `<div class="mini-loader"><span></span><b>지문 근거를 확인하고 있습니다</b></div>` : ""}
-    ${messages.map((m) => `<div class="qna-message"><b>Q.</b> ${escapeHtml(m.question)}<br><b>A.</b> ${escapeHtml(m.answer)}${m.sourcePointer ? `<p><b>근거:</b> ${escapeHtml(m.sourcePointer)}</p>` : ""}</div>`).join("")}
+    ${messages.map((m) => `<div class="qna-message"><b>Q.</b> ${escapeHtml(m.question)}<div><b>A.</b> ${renderMarkdownText(m.answer)}</div>${m.sourcePointer ? `<p><b>근거:</b> ${escapeHtml(m.sourcePointer)}</p>` : ""}</div>`).join("")}
   </div>`;
 }
 
@@ -803,9 +1105,9 @@ function renderMemoCard(n) {
   return `<div class="card memo-card" data-note-id="${escapeHtml(n.id)}">
     <div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt).toLocaleString())}</span><span class="memo-source" title="${escapeHtml(n.selectedText || "지문 질문")}">${escapeHtml(shorten(n.selectedText || "지문 질문", 70))}</span></div>
     ${n.question ? `<p class="memo-question"><b>Q.</b> ${escapeHtml(n.question)}</p>` : ""}
-    <p class="memo-answer">${escapeHtml(n.explanation?.simple || n.answer || "")}</p>
+    <div class="memo-answer">${renderMarkdownText(n.explanation?.simple || n.answer || "")}</div>
     ${n.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(n.sourcePointer)}</p>` : ""}
-    ${thread.map((m) => `<div class="memo-thread"><p><b>Q.</b> ${escapeHtml(m.question)}</p><p><b>A.</b> ${escapeHtml(m.answer)}</p>${m.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(m.sourcePointer)}</p>` : ""}</div>`).join("")}
+    ${thread.map((m) => `<div class="memo-thread"><p><b>Q.</b> ${escapeHtml(m.question)}</p><div class="memo-answer">${renderMarkdownText(m.answer)}</div>${m.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(m.sourcePointer)}</p>` : ""}</div>`).join("")}
     <div class="suggestion-row compact">${suggestions.slice(0, 4).map((q) => `<button class="suggestion-chip" data-memo-follow-quick="${escapeHtml(n.id)}" data-question="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>
     <div class="inline-control memo-inline">
       <input class="input" data-memo-follow-input="${escapeHtml(n.id)}" value="${escapeHtml(inputValue)}" placeholder="이 메모에 대해 이어서 질문하기" />
@@ -1144,6 +1446,7 @@ function startProgress(kind) {
 
 
 async function runAiCleanup() {
+  return runExclusive("cleanup", async () => {
   const input = document.querySelector("#passageInput");
   const before = input?.value || state.passage || "";
   if (!before.trim()) return notify("info", "정돈할 지문이 없습니다", "OCR 지문을 먼저 붙여 넣어 주세요.");
@@ -1171,9 +1474,11 @@ async function runAiCleanup() {
     state.loading = null;
     render();
   }
+  });
 }
 
 async function runAnalysis() {
+  return runExclusive("analysis", async () => {
   const text = state.analysis ? state.passage : (document.querySelector("#passageInput")?.value || state.passage);
   const apiKey = getApiKey();
   state.passage = text.trim();
@@ -1189,21 +1494,22 @@ async function runAnalysis() {
   try {
     if (state.demoMode) {
       await delay(700);
-      state.analysis = createDemoAnalysis(state.passage);
+      state.analysis = normalizeAnalysisResult(createDemoAnalysis(state.passage), state.passage);
       notify("info", "데모 모드 분석", "실제 API 호출 없이 샘플 분석 엔진으로 화면을 구성했습니다. 실제 분석은 데모 모드를 끄세요.");
     } else {
-      state.analysis = await analyzePassage({
+      state.analysis = normalizeAnalysisResult(await analyzePassage({
         apiKey,
         model: state.useReasoning ? state.reasoningModel : state.model,
         reasoningMode: state.useReasoning,
         reasoningEffort: state.reasoningEffort,
         passage: state.passage
-      });
+      }), state.passage);
       if (state.analysis?.cleanedPassage && state.analysis.cleanedPassage.length > 20) {
         state.passage = state.analysis.cleanedPassage.trim();
       }
     }
     state.questions = null;
+    resetQuestionState();
     state.mindPositions = {};
     state.mindPan = { x: 0, y: 0 };
     state.mindZoom = 1;
@@ -1216,9 +1522,11 @@ async function runAnalysis() {
     state.loadingProgress = 100;
     render();
   }
+  });
 }
 
 async function runQuestionGeneration() {
+  return runExclusive("questions", async () => {
   if (!state.analysis) return notify("error", "분석 결과가 없습니다", "먼저 지문 분석을 완료해 주세요.", "state.analysis is null");
   const apiKey = getApiKey();
   if (!state.demoMode && !apiKey) {
@@ -1236,17 +1544,18 @@ async function runQuestionGeneration() {
         const i = demo.ox.length + 1;
         demo.ox.push({ id: `ox${i}`, statement: `복습용 진술 ${i}: 지문의 핵심 관점을 한쪽으로 단순화하면 오답이 되기 쉽다.`, answer: i % 2 ? "O" : "X", explanation: "데모 모드 예시입니다. 실제 API 사용 시 지문 기반으로 생성됩니다.", trap: "핵심어만 보고 판단하지 않기" });
       }
-      state.questions = demo;
+      state.questions = normalizeQuestionSet(demo);
     } else {
-      state.questions = await generateQuestions({
+      state.questions = normalizeQuestionSet(await generateQuestions({
         apiKey,
         model: state.useReasoning ? state.reasoningModel : state.model,
         reasoningMode: state.useReasoning,
         reasoningEffort: state.reasoningEffort,
         passage: state.passage,
         analysis: state.analysis
-      });
+      }));
     }
+    resetQuestionState();
     state.tab = "questions";
     state.questionTab = "mc";
   } catch (error) {
@@ -1256,9 +1565,11 @@ async function runQuestionGeneration() {
     state.loading = null;
     render();
   }
+  });
 }
 
 async function runSelectionExplain() {
+  return runExclusive("selectionExplain", async () => {
   if (!state.selectedText) return;
   const selectedText = state.selectedText;
   const apiKey = getApiKey();
@@ -1296,6 +1607,7 @@ async function runSelectionExplain() {
     state.noteLoading = false;
     render();
   }
+  });
 }
 
 
@@ -1329,6 +1641,7 @@ async function runSelectionQuestion(quickQuestion = "") {
 }
 
 async function createMemoAnswer({ selectedText = "", question = "", source = "reader" }) {
+  return runExclusive(source === "reader" ? "readerMemoAsk" : "selectionMemoAsk", async () => {
   const apiKey = getApiKey();
   if (!state.demoMode && !apiKey) {
     notify("error", "API 키가 없습니다", "설정 메뉴에서 API 키를 붙여넣고 '키 적용'을 눌러 주세요.", "apiKey is empty and demoMode is off");
@@ -1379,12 +1692,14 @@ async function createMemoAnswer({ selectedText = "", question = "", source = "re
     state.noteLoading = false;
     render();
   }
+  });
 }
 
 async function runMemoFollowAsk(noteId, quickQuestion = "") {
+  return runExclusive(`memoFollow:${noteId}`, async () => {
   const note = state.notes.find((n) => n.id === noteId);
   if (!note) return notify("error", "메모를 찾지 못했습니다", "이어 질문할 메모가 없습니다.", `note not found: ${noteId}`);
-  const question = quickQuestion || getMemoQuestionFromInput(`[data-memo-follow-input="${CSS.escape(noteId)}"]`, state.memoFollowInputs[noteId]);
+  const question = quickQuestion || getMemoQuestionFromInput(`[data-memo-follow-input="${safeCssEscape(noteId)}"]`, state.memoFollowInputs[noteId]);
   if (!question) return notify("info", "질문이 비어 있습니다", "이어 묻고 싶은 내용을 적어 주세요.");
   const apiKey = getApiKey();
   if (!state.demoMode && !apiKey) {
@@ -1428,6 +1743,7 @@ async function runMemoFollowAsk(noteId, quickQuestion = "") {
     state.memoFollowLoading = null;
     render();
   }
+  });
 }
 
 
@@ -1478,6 +1794,7 @@ function getShortAnswerInput(id) {
 
 
 async function runShortAnswerBatchGrade() {
+  return runExclusive("shortBatchGrade", async () => {
   const list = state.questions?.shortAnswer || [];
   if (!list.length) return notify("info", "서술형 문항이 없습니다", "먼저 문제를 생성해 주세요.");
   const items = list.map((q) => {
@@ -1516,9 +1833,11 @@ async function runShortAnswerBatchGrade() {
     list.forEach((q) => { delete state.shortGradeLoading[q.id]; });
     render();
   }
+  });
 }
 
 async function runShortAnswerGrade(id) {
+  return runExclusive(`shortGrade:${id}`, async () => {
   const q = findQuestion("short", id);
   if (!q) return notify("error", "문항을 찾지 못했습니다", "서술형 문항 데이터가 없습니다.", `short question not found: ${id}`);
   const userAnswer = getShortAnswerInput(id);
@@ -1579,6 +1898,7 @@ async function runShortAnswerGrade(id) {
     delete state.shortGradeLoading[id];
     render();
   }
+  });
 }
 
 function getQnaInput(key) {
@@ -1589,6 +1909,7 @@ function getQnaInput(key) {
 }
 
 async function runQuestionAsk(key) {
+  return runExclusive(`questionAsk:${key}`, async () => {
   const [type, id] = String(key).split(":");
   const q = findQuestion(type, id);
   if (!q) return notify("error", "문항을 찾지 못했습니다", "질문할 문항 데이터가 없습니다.", `question not found: ${key}`);
@@ -1636,6 +1957,7 @@ async function runQuestionAsk(key) {
     state.qnaLoading = null;
     render();
   }
+  });
 }
 
 function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -1650,7 +1972,11 @@ function saveCurrentRecord() {
     passage: state.passage,
     analysis: state.analysis,
     questions: state.questions,
-    notes: state.notes
+    notes: state.notes,
+    userAnswers: state.userAnswers,
+    revealAnswers: state.revealAnswers,
+    shortGrades: state.shortGrades,
+    qnaMessages: state.qnaMessages
   };
   state.records = saveRecord(record);
   state.tab = "saved";
@@ -1660,10 +1986,14 @@ function saveCurrentRecord() {
 function loadRecord(id) {
   const record = state.records.find((r) => r.id === id);
   if (!record) return;
-  state.passage = record.passage;
-  state.analysis = record.analysis;
-  state.questions = record.questions;
-  state.notes = record.notes || [];
+  state.passage = record.passage || "";
+  state.analysis = record.analysis ? normalizeAnalysisResult(record.analysis, state.passage) : null;
+  state.questions = record.questions ? normalizeQuestionSet(record.questions) : null;
+  state.notes = ensureArray(record.notes);
+  state.userAnswers = record.userAnswers || { mc: {}, ox: {}, short: {} };
+  state.revealAnswers = record.revealAnswers || { mc: {}, ox: {}, short: {} };
+  state.shortGrades = record.shortGrades || {};
+  state.qnaMessages = record.qnaMessages || {};
   state.tab = "summary";
   render();
 }

@@ -1052,3 +1052,62 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   .memo-inline { grid-template-columns: 1fr; }
   .memo-source { text-align: left; flex-basis: 100%; }
 }
+
+/* v2.7 Markdown rendering for AI memo answers */
+.rich-markdown {
+  color: var(--text);
+  line-height: 1.82;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+.rich-markdown p {
+  margin: 8px 0;
+}
+.rich-markdown h3,
+.rich-markdown h4,
+.rich-markdown h5,
+.rich-markdown h6 {
+  margin: 14px 0 7px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 850;
+  letter-spacing: -.01em;
+}
+.rich-markdown ul,
+.rich-markdown ol {
+  margin: 8px 0 10px 20px;
+  padding: 0;
+}
+.rich-markdown li {
+  margin: 5px 0;
+  padding-left: 2px;
+}
+.rich-markdown strong {
+  color: var(--accent);
+  font-weight: 850;
+  background: rgba(79, 70, 229, .08);
+  border-radius: 6px;
+  padding: 0 3px;
+}
+.rich-markdown code {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .92em;
+}
+.rich-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+.memo-answer .rich-markdown {
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.memo-thread .memo-answer .rich-markdown {
+  max-height: 420px;
+}
