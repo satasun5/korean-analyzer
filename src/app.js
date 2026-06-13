@@ -74,7 +74,9 @@ const state = {
   qnaMessages: {},
   qnaLoading: null,
   shortGradeConfirm: {},
-  qnaOpen: {}
+  qnaOpen: {},
+  // 실행 중인 비동기 작업을 추적하여 버튼 연타와 중복 API 호출을 방지합니다.
+  inFlight: {}
 };
 
 document.documentElement.dataset.theme = state.theme;
@@ -505,6 +507,7 @@ function resetQuestionState() {
 }
 
 function runExclusive(key, task) {
+  if (!state.inFlight || typeof state.inFlight !== "object") state.inFlight = {};
   if (state.inFlight[key]) {
     notify("info", "이미 처리 중입니다", "현재 작업이 끝난 뒤 다시 눌러 주세요.");
     return Promise.resolve(null);
@@ -512,7 +515,14 @@ function runExclusive(key, task) {
   state.inFlight[key] = true;
   return Promise.resolve()
     .then(task)
-    .finally(() => { delete state.inFlight[key]; });
+    .catch((error) => {
+      // 각 작업 내부 catch가 놓친 예외까지 토스트 로그로 남겨 버튼이 조용히 먹통처럼 보이지 않게 합니다.
+      notify("error", "작업 실행 오류", error?.message || "알 수 없는 오류가 발생했습니다.", error?.stack || String(error));
+      return null;
+    })
+    .finally(() => {
+      if (state.inFlight) delete state.inFlight[key];
+    });
 }
 
 function debounce(fn, delay = 160) {
