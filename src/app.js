@@ -758,7 +758,7 @@ function renderSettings() {
       </div>
 
       <div class="field">
-        <label>서술형 채점 모델 <small>기본 저비용</small></label>
+        <label>저비용 모델 <small>AI 정돈 · AI 댓글 · 서술형 채점</small></label>
         <div class="inline-control">
           <input class="input" id="gradingModelInput" value="${escapeHtml(state.gradingModel)}" placeholder="gpt-4.1-mini" />
           <button class="btn small" data-model-picker="grading">모델 선택</button>
@@ -934,7 +934,7 @@ function renderAnalysisPanel() {
     <aside class="panel">
       <div class="tabs">
         ${[
-          ["summary", "요약"], ["structure", "구조"], ["concepts", "개념"], ["questions", "문제"], ["notes", "메모"], ["saved", "저장"]
+          ["summary", "요약"], ["structure", "구조"], ["concepts", "개념"], ["questions", "문제"], ["notes", "메모"], ["saved", "저장"], ["comments", "AI 댓글"]
         ].map(([id, label]) => `<button class="tab ${state.tab === id ? "active" : ""}" data-tab="${id}">${label}</button>`).join("")}
       </div>
       <div class="tab-content" data-scroll-key="analysis-tab">
@@ -944,7 +944,7 @@ function renderAnalysisPanel() {
 }
 
 function renderTabContent() {
-  if (!state.analysis && !["saved", "notes"].includes(state.tab)) {
+  if (!state.analysis && !["saved", "notes", "comments"].includes(state.tab)) {
     return `<div class="empty">아직 분석 결과가 없습니다.<br>지문을 넣고 <b>분석하기</b>를 눌러 주세요.</div>`;
   }
   if (state.tab === "summary") return renderSummaryTab();
@@ -953,6 +953,7 @@ function renderTabContent() {
   if (state.tab === "questions") return renderQuestionsTab();
   if (state.tab === "notes") return renderNotesTab();
   if (state.tab === "saved") return renderSavedTab();
+  if (state.tab === "comments") return renderCommentsTab();
   return "";
 }
 
@@ -1165,33 +1166,30 @@ function renderMemoCard(n) {
 
 function renderSavedTab() {
   const records = state.records || [];
-  return `<div class="saved-tab-grid">
-    ${renderBotChatPanel()}
-    <section class="saved-records-card">
-      <div class="saved-headline"><b>저장된 분석 노트</b><span>${records.length}개</span></div>
-      ${records.length ? `<div class="saved-list">${records.map((r) => `<div class="card saved-item"><div><h4>${escapeHtml(r.title)}</h4><p>${escapeHtml(new Date(r.createdAt).toLocaleString())} · ${escapeHtml(r.field || "")}</p></div><div><button class="btn small" data-load-record="${r.id}">열기</button><button class="btn small danger" data-del-record="${r.id}">삭제</button></div></div>`).join("")}</div>` : `<div class="empty compact-empty">저장된 분석이 없습니다.</div>`}
-    </section>
-  </div>`;
+  return `<section class="saved-records-card standalone-card">
+    <div class="saved-headline"><b>저장된 분석 노트</b><span>${records.length}개</span></div>
+    ${records.length ? `<div class="saved-list">${records.map((r) => `<div class="card saved-item"><div><h4>${escapeHtml(r.title)}</h4><p>${escapeHtml(new Date(r.createdAt).toLocaleString())} · ${escapeHtml(r.field || "")}</p></div><div><button class="btn small" data-load-record="${r.id}">열기</button><button class="btn small danger" data-del-record="${r.id}">삭제</button></div></div>`).join("")}</div>` : `<div class="empty compact-empty">저장된 분석이 없습니다.</div>`}
+  </section>`;
+}
+
+function renderCommentsTab() {
+  return renderBotChatPanel();
 }
 
 function renderBotChatPanel() {
-  const quicks = getReaderQuestionSuggestions().slice(0, 4);
   const disabled = !state.analysis || state.botChatLoading;
-  return `<section class="bot-chat-card">
+  return `<section class="bot-chat-card standalone-card">
     <div class="bot-chat-head">
-      <div><b>AI 댓글 친구들</b><span>지문 근거로 짧고 귀엽게 답글을 달아줍니다</span></div>
+      <div><b>AI 댓글</b><span>질문을 남기면 지문 근거를 바탕으로 짧은 댓글이 달립니다</span></div>
       ${state.botChatLoading ? `<div class="tiny-loader"><span></span>댓글 작성 중</div>` : ""}
-    </div>
-    <div class="bot-quick-row">
-      ${quicks.map((q) => `<button class="suggestion-chip" data-bot-quick="${escapeHtml(q)}" ${disabled ? "disabled" : ""}>${escapeHtml(q)}</button>`).join("")}
     </div>
     <div class="inline-control bot-input-line">
       <input class="input" id="botChatInput" value="${escapeHtml(state.botChatInput || "")}" placeholder="예: 이 지문에서 선지 함정이 될 부분 알려줘" ${!state.analysis ? "disabled" : ""} />
       <button class="btn small primary" id="botChatAskBtn" ${disabled ? "disabled" : ""}>질문</button>
     </div>
-    ${!state.analysis ? `<p class="hint-line">지문 분석을 먼저 완료하면 AI 댓글 친구들을 사용할 수 있습니다.</p>` : ""}
+    ${!state.analysis ? `<p class="hint-line">지문 분석을 먼저 완료하면 AI 댓글을 사용할 수 있습니다.</p>` : `<p class="hint-line">AI 댓글은 메뉴의 저비용 모델을 사용합니다.</p>`}
     <div class="bot-thread-list">
-      ${(state.botChatThreads || []).map((t) => renderBotThread(t)).join("") || `<div class="empty compact-empty">아직 댓글이 없습니다. 질문을 남기면 여러 AI 친구들이 답글을 달아줍니다.</div>`}
+      ${(state.botChatThreads || []).map((t) => renderBotThread(t)).join("") || `<div class="empty compact-empty">아직 댓글이 없습니다. 질문을 남기면 AI 댓글이 달립니다.</div>`}
     </div>
   </section>`;
 }
@@ -1282,7 +1280,7 @@ function renderSideMenu() {
 
 function renderModelPicker() {
   if (!state.modelPickerTarget) return "";
-  const targetLabel = state.modelPickerTarget === "reasoning" ? "전문 추론 모델" : state.modelPickerTarget === "grading" ? "서술형 채점 모델" : "일반 분석 모델";
+  const targetLabel = state.modelPickerTarget === "reasoning" ? "전문 추론 모델" : state.modelPickerTarget === "grading" ? "저비용 모델" : "일반 분석 모델";
   return `
     <div class="modal-backdrop show" id="modelBackdrop"></div>
     <section class="model-picker show">
@@ -1511,7 +1509,6 @@ function attachAppEvents() {
   document.querySelectorAll("[data-del-record]").forEach((el) => el.addEventListener("click", () => { state.records = deleteRecord(el.dataset.delRecord); render(); }));
   document.querySelector("#botChatInput")?.addEventListener("input", debounce((e) => { state.botChatInput = e.target.value; }, 80));
   document.querySelector("#botChatAskBtn")?.addEventListener("click", () => runBotChatAsk());
-  document.querySelectorAll("[data-bot-quick]").forEach((el) => el.addEventListener("click", () => runBotChatAsk(el.dataset.botQuick)));
   document.querySelectorAll("[data-open-bot-reply]").forEach((el) => el.addEventListener("click", () => { const key = el.dataset.openBotReply; state.botReplyOpen[key] = !state.botReplyOpen[key]; render(); }));
   document.querySelectorAll("[data-bot-reply-input]").forEach((el) => el.addEventListener("input", debounce(() => { state.botReplyInputs[el.dataset.botReplyInput] = el.value; }, 80)));
   document.querySelectorAll("[data-bot-reply-ask]").forEach((el) => el.addEventListener("click", () => runBotReplyAsk(el.dataset.botReplyAsk)));

@@ -1219,6 +1219,10 @@ button:disabled { cursor: not-allowed; opacity: .6; }
 .bot-reply-thread { margin-top: 8px; }
 .bot-mini-loader { margin-top: 8px; }
 .compact-empty { padding: 18px; min-height: auto; }
+.standalone-card {
+  width: 100%;
+}
+
 @media (max-width: 980px) {
   .saved-tab-grid { grid-template-columns: 1fr; }
   .bot-thread-list { max-height: none; }
