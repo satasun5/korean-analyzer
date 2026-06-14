@@ -1478,3 +1478,56 @@ button:disabled { cursor: not-allowed; opacity: .6; }
   color: color-mix(in srgb, var(--accent) 74%, #334155);
   font-weight: 900;
 }
+
+/* v3.0.2 memo UX polish */
+.memo-delete-btn {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+.selection-memo .memo-head {
+  margin-bottom: 10px;
+}
+.memo-selected-box {
+  border: 1px solid rgba(99,102,241,.2);
+  background: linear-gradient(135deg, rgba(99,102,241,.13), rgba(14,165,233,.07));
+  border-radius: 16px;
+  padding: 13px 15px;
+  margin: 8px 0 8px;
+}
+.memo-selected-box b {
+  display: inline-block;
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 13px;
+}
+.memo-selected-box p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.75;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+.memo-question-under {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  background: transparent;
+  padding: 4px 2px 8px 12px;
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+}
+.memo-elbow {
+  color: var(--accent);
+  font-weight: 900;
+  flex: 0 0 auto;
+}
+.reader-memo .memo-question {
+  margin-top: 10px;
+}
+@media (max-width: 720px) {
+  .memo-head { gap: 8px; }
+  .memo-delete-btn { margin-left: auto; }
+}

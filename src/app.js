@@ -1370,11 +1370,20 @@ function renderMemoCard(n) {
   const suggestions = n.suggestedQuestions?.length ? n.suggestedQuestions : ["더 쉽게 설명해줘", "예시 들어줘", "오해하기 쉬운 부분을 알려줘"];
   const inputValue = state.memoFollowInputs[n.id] || "";
   const loading = state.memoFollowLoading === n.id;
-  return `<div class="card memo-card" data-note-id="${escapeHtml(n.id)}">
-    <div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt).toLocaleString())}</span><span class="memo-source" title="${escapeHtml(n.selectedText || "지문 질문")}">${escapeHtml(shorten(n.selectedText || "지문 질문", 70))}</span></div>
-    ${n.question ? `<p class="memo-question"><b>Q.</b> ${escapeHtml(n.question)}</p>` : ""}
+  const selected = String(n.selectedText || "").trim();
+  const isSelectionNote = n.source === "selection" || (selected && selected !== "지문 전체 질문" && selected !== "지문 질문");
+  const dateLabel = escapeHtml(new Date(n.createdAt || Date.now()).toLocaleString());
+  const deleteButton = `<button class="btn tiny danger memo-delete-btn" data-delete-memo="${escapeHtml(n.id)}" title="메모 삭제">삭제</button>`;
+  const head = `<div class="memo-head"><span class="badge">${dateLabel}</span>${!isSelectionNote ? `<span class="memo-source" title="${escapeHtml(selected || "지문 질문")}">${escapeHtml(shorten(selected || "지문 질문", 70))}</span>` : ""}${deleteButton}</div>`;
+  const questionText = n.question || (isSelectionNote ? "이 선택 구절 자세히 설명해줘" : "메모");
+  const questionBlock = isSelectionNote
+    ? `<div class="memo-selected-box"><b>선택 구절</b><p>“${escapeHtml(selected || n.sourcePointer || "선택 구절") }”</p></div><p class="memo-question memo-question-under"><span class="memo-elbow">ㄴ</span>${escapeHtml(questionText)}</p>`
+    : `${n.question ? `<p class="memo-question"><b>Q.</b> ${escapeHtml(n.question)}</p>` : ""}`;
+  return `<div class="card memo-card ${isSelectionNote ? "selection-memo" : "reader-memo"}" data-note-id="${escapeHtml(n.id)}">
+    ${head}
+    ${questionBlock}
     <div class="memo-answer">${renderMarkdownText(n.explanation?.simple || n.answer || "")}</div>
-    ${n.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(n.sourcePointer)}</p>` : ""}
+    ${!isSelectionNote && n.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(n.sourcePointer)}</p>` : ""}
     ${thread.map((m) => `<div class="memo-thread"><p><b>Q.</b> ${escapeHtml(m.question)}</p><div class="memo-answer">${renderMarkdownText(m.answer)}</div>${m.sourcePointer ? `<p class="source-line"><b>관련 부분:</b> ${escapeHtml(m.sourcePointer)}</p>` : ""}</div>`).join("")}
     <div class="suggestion-row compact">${suggestions.slice(0, 4).map((q) => `<button class="suggestion-chip" data-memo-follow-quick="${escapeHtml(n.id)}" data-question="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>
     <div class="inline-control memo-inline">
@@ -1383,6 +1392,18 @@ function renderMemoCard(n) {
     </div>
     ${loading ? `<div class="mini-loader"><span></span><b>이전 메모 맥락을 이어서 답변하고 있습니다</b></div>` : ""}
   </div>`;
+}
+
+function deleteMemo(noteId) {
+  const note = state.notes.find((n) => n.id === noteId);
+  if (!note) return;
+  const label = note.question || note.selectedText || "이 메모";
+  if (!confirm(`메모를 삭제할까요?\n\n${shorten(label, 80)}`)) return;
+  state.notes = state.notes.filter((n) => n.id !== noteId);
+  delete state.memoFollowInputs[noteId];
+  if (state.memoFollowLoading === noteId) state.memoFollowLoading = null;
+  notify("info", "메모 삭제 완료", "선택한 메모를 삭제했습니다.");
+  render();
 }
 
 function renderSavedTab() {
@@ -1637,7 +1658,7 @@ function runExport() {
       state.exportOpen = false;
       render();
       openPdfPrintWindow(options, `${filenameBase}.html`);
-      notify("info", "PDF 인쇄 화면을 준비했습니다", "인쇄 대상에서 'PDF로 저장'을 선택해 주세요. 팝업 없이 현재 탭에서 인쇄 대화상자를 엽니다.");
+      notify("info", "PDF 인쇄 화면을 준비했습니다", "인쇄 대상에서 'PDF로 저장'을 선택해 주세요. 모바일에서는 인쇄 전용 탭이 열릴 수 있습니다.");
     }
   } catch (error) {
     notify("error", "내보내기 실패", error.message || "내보내기 중 오류가 발생했습니다.", error.stack || String(error));
@@ -1662,8 +1683,19 @@ function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") 
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function isLikelyMobilePrintDevice() {
+  const ua = navigator.userAgent || "";
+  return /Android|iPhone|iPad|iPod|Mobile|SamsungBrowser|KAKAOTALK|NAVER/i.test(ua) || window.matchMedia?.("(max-width: 760px)")?.matches;
+}
+
 function openPdfPrintWindow(options, fallbackFilename = "반짝국어_분석.html") {
   const html = buildPdfHtml(options);
+  // 모바일 브라우저는 숨겨진 iframe 인쇄를 무시하고 현재 사이트 화면을 인쇄하는 경우가 많습니다.
+  // 그래서 모바일에서는 보이는 인쇄 전용 문서를 새 탭으로 열어 그 문서 자체를 PDF 저장 대상으로 만듭니다.
+  if (isLikelyMobilePrintDevice()) {
+    openPdfFallbackWindow(html, fallbackFilename, null, { mobile: true });
+    return;
+  }
   const frame = document.createElement("iframe");
   frame.title = "반짝국어 PDF 인쇄";
   frame.setAttribute("aria-hidden", "true");
@@ -1708,7 +1740,7 @@ function openPdfPrintWindow(options, fallbackFilename = "반짝국어_분석.htm
   }
 }
 
-function openPdfFallbackWindow(html, fallbackFilename, originalError) {
+function openPdfFallbackWindow(html, fallbackFilename, originalError, options = {}) {
   const win = window.open("", "_blank", "width=980,height=1200");
   if (!win) {
     downloadTextFile(fallbackFilename, html, "text/html;charset=utf-8");
@@ -1718,7 +1750,12 @@ function openPdfFallbackWindow(html, fallbackFilename, originalError) {
   win.document.write(html);
   win.document.close();
   win.focus();
-  win.addEventListener("load", () => window.setTimeout(() => win.print(), 500), { once: true });
+  const delayMs = options.mobile ? 900 : 500;
+  const tryPrint = () => window.setTimeout(() => {
+    try { win.focus(); win.print(); } catch { /* 모바일 브라우저에서는 상단 버튼으로 다시 인쇄할 수 있습니다. */ }
+  }, delayMs);
+  if (win.document.readyState === "complete") tryPrint();
+  else win.addEventListener("load", tryPrint, { once: true });
 }
 
 function buildPdfHtml(options) {
@@ -1736,7 +1773,8 @@ function buildPdfHtml(options) {
   if (flowSections.length) sections.push(`<main class="export-flow-page">${flowSections.join("\n")}</main>`);
   if (options.questions && state.questions) sections.push(renderExportQuestionsHtml(false));
   if (options.questions && options.includeSolutions && state.questions) sections.push(renderExportQuestionsHtml(true));
-  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${buildPdfStyles()}</style></head><body>${sections.join("\n")}<script>window.addEventListener('afterprint',()=>{});<\/script></body></html>`;
+  const toolbar = `<div class="print-toolbar no-print"><b>반짝국어 PDF 내보내기</b><span>모바일에서 사이트 화면이 저장되면 이 인쇄 전용 페이지의 버튼을 눌러 다시 PDF로 저장하세요.</span><button onclick="window.print()">PDF로 저장/인쇄</button></div>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>${buildPdfStyles()}</style></head><body>${toolbar}${sections.join("\\n")}<script>window.addEventListener('afterprint',()=>{});<\/script></body></html>`;
 }
 
 function buildPdfStyles() {
@@ -1744,6 +1782,10 @@ function buildPdfStyles() {
     @page { size: A4; margin: 18mm 11mm 15mm; @bottom-center { content: counter(page); color: #8b95aa; font-size: 8pt; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; } }
     * { box-sizing: border-box; }
     body { margin: 0; color: #172033; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", Arial, sans-serif; background: linear-gradient(135deg, #f8fbff 0%, #f5f3ff 45%, #eefcff 100%); font-size: 10pt; line-height: 1.5; }
+    .print-toolbar { position: sticky; top: 0; z-index: 20; display:flex; align-items:center; gap:10px; padding:10px 14px; background:rgba(255,255,255,.96); border-bottom:1px solid rgba(118,129,152,.22); box-shadow:0 10px 24px rgba(31,42,68,.12); font-size:13px; }
+    .print-toolbar b { color:#4f46e5; }
+    .print-toolbar span { flex:1; color:#65718b; }
+    .print-toolbar button { border:0; border-radius:999px; padding:9px 14px; color:#fff; font-weight:800; background:linear-gradient(135deg,#4f46e5,#06b6d4); }
     .export-page, .export-flow-page { position: relative; padding: 12mm 9mm 13mm; box-decoration-break: clone; -webkit-box-decoration-break: clone; background: linear-gradient(135deg, rgba(255,255,255,.97), rgba(246,250,255,.95)); border: 1px solid rgba(124, 137, 171, .16); overflow: visible; }
     .export-page::before, .export-flow-page::before { content: ""; position: absolute; inset: -26mm auto auto -30mm; width: 80mm; height: 80mm; border-radius: 999px; background: radial-gradient(circle, rgba(129,140,248,.12), transparent 65%); pointer-events: none; }
     .cover, .passage-page, .question-page, .solution-page { min-height: 255mm; break-after: page; page-break-after: always; }
@@ -1789,6 +1831,9 @@ function buildPdfStyles() {
     .margin-note b { display:block; margin:.8mm 0 .55mm; color:#1f2a44; font-size:7.45pt; }
     .question-page, .solution-page { padding-top: 10mm; }
     .question-item { border:1px solid rgba(118,129,152,.16); background:rgba(255,255,255,.82); border-radius:10px; padding:4mm; margin-bottom:4mm; break-inside: avoid; page-break-inside: avoid; }
+    .export-view-box { margin:2.2mm 0 3mm; padding:3mm 3.5mm; border-radius:9px; border:1px solid rgba(99,102,241,.18); background:rgba(99,102,241,.065); break-inside: avoid; page-break-inside: avoid; }
+    .export-view-box b { display:inline-flex; margin-bottom:1.2mm; color:#4f46e5; font-size:8.5pt; }
+    .export-view-box p { margin:0; line-height:1.55; white-space:pre-wrap; }
     .choice { margin-left: 5mm; }
     .solution-list { margin: 0; padding: 0; }
     .solution-line { list-style:none; border-bottom:1px solid rgba(118,129,152,.18); padding:2.4mm 0; margin:0; break-inside: avoid; page-break-inside: avoid; }
@@ -1797,12 +1842,17 @@ function buildPdfStyles() {
     .memo-export-item { border:1px solid rgba(118,129,152,.16); background:rgba(255,255,255,.82); border-radius:10px; padding:4mm; margin-bottom:4mm; break-inside: avoid; page-break-inside: avoid; }
     .memo-head { display:flex; align-items:center; justify-content:space-between; gap:4mm; margin-bottom:2.5mm; }
     .memo-source { color:#65718b; font-size:8pt; max-width: 105mm; text-align:right; }
+    .memo-selected-box { border:1px solid rgba(99,102,241,.18); background:linear-gradient(135deg, rgba(99,102,241,.10), rgba(14,165,233,.06)); border-radius:10px; padding:3mm 3.5mm; margin:0 0 2mm; }
+    .memo-selected-box b { display:block; color:#4f46e5; font-size:8pt; margin-bottom:1mm; }
+    .memo-selected-box p { margin:0; font-size:10.2pt; line-height:1.55; color:#1f2a44; }
     .memo-question { background:rgba(99,102,241,.08); border-radius:8px; padding:2.5mm 3mm; margin:0 0 3mm; font-size:11pt; }
+    .memo-question-under { display:flex; align-items:flex-start; gap:2mm; background:transparent; padding:0 0 2.5mm 1mm; font-size:10.2pt; color:#29344f; }
+    .memo-elbow { color:#4f46e5; font-weight:900; }
     .memo-answer { font-size:10pt; line-height:1.65; }
-    .memo-emphasis { color:#4f46e5; font-weight:800; background:rgba(99,102,241,.11); border-radius:4px; padding:0 .7mm; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+    .memo-inline-mark, .memo-emphasis { color:#4f46e5; font-weight:800; background:rgba(99,102,241,.11); border-radius:4px; padding:0 .7mm; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
     .comment { border-left:3px solid rgba(99,102,241,.32); padding:2mm 0 2mm 3mm; margin:2mm 0; break-inside: avoid; }
     .muted { color:#68758d; }
-    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .export-page, .export-flow-page { border:0; } }
+    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .no-print, .print-toolbar { display:none !important; } .export-page, .export-flow-page { border:0; } }
   `;
 }
 
@@ -1877,6 +1927,12 @@ function renderExportConceptsHtml() {
   return exportBlock("개념", "개념 사전·헷갈리는 문장", body);
 }
 
+function renderExportQuestionViewBox(item) {
+  const view = cleanViewBox(item?.viewBox || "");
+  if (!view) return "";
+  return `<div class="export-view-box"><b>&lt;보기&gt;</b><p>${escapeHtml(view)}</p></div>`;
+}
+
 function renderExportQuestionsHtml(answersOnly = false) {
   const q = state.questions || {};
   const title = answersOnly ? "문제 해설" : "문제";
@@ -1889,13 +1945,12 @@ function renderExportQuestionsHtml(answersOnly = false) {
     return exportPage(title, "정답·출제 의도·해설", body, "solution-page");
   }
   const body = [
-    ...ensureArray(q.multipleChoice).map((item, i) => `<div class="question-item"><h3>5지선다 ${i + 1}. ${escapeHtml(item.question || "")}</h3>${ensureArray(item.choices).map((c) => `<p class="choice">${normalizeChoiceNumber(c.number)} ${escapeHtml(c.text || "")}</p>`).join("")}</div>`),
+    ...ensureArray(q.multipleChoice).map((item, i) => `<div class="question-item"><h3>5지선다 ${i + 1}. ${escapeHtml(item.question || "")}</h3>${renderExportQuestionViewBox(item)}${ensureArray(item.choices).map((c) => `<p class="choice">${normalizeChoiceNumber(c.number)} ${escapeHtml(c.text || "")}</p>`).join("")}</div>`),
     ...ensureArray(q.ox).map((item, i) => `<div class="question-item"><h3>OX ${i + 1}. ${escapeHtml(item.statement || "")}</h3><p class="muted">O / X</p></div>`),
     ...ensureArray(q.shortAnswer).map((item, i) => `<div class="question-item"><h3>서술형 ${i + 1}. ${escapeHtml(item.question || "")}</h3><p class="muted">답안:</p></div>`)
   ].join("") || `<div class="card">문제가 없습니다.</div>`;
   return exportPage(title, "문항만", body, "question-page");
 }
-
 
 function formatExportMemoText(value = "") {
   const raw = String(value || "")
@@ -1917,11 +1972,17 @@ function formatExportMemoText(value = "") {
 function renderExportNotesHtml() {
   const notes = ensureArray(state.notes);
   const body = notes.length ? notes.map((n) => {
-    const question = n.question || "메모";
-    const selected = n.selectedText || n.sourcePointer || "지문 전체 질문";
+    const selected = String(n.selectedText || "").trim();
+    const isSelectionNote = n.source === "selection" || (selected && selected !== "지문 전체 질문" && selected !== "지문 질문");
+    const question = n.question || (isSelectionNote ? "이 선택 구절 자세히 설명해줘" : "메모");
+    const source = selected || n.sourcePointer || "지문 전체 질문";
     const answer = n.explanation?.simple || n.explanation?.answer || n.answer || "";
     const threadHtml = ensureArray(n.thread).map((t) => `<p><b>추가 질문</b> ${escapeHtml(t.question || "")}<br>${formatExportMemoText(t.answer || "")}</p>`).join("");
-    return `<div class="memo-export-item"><div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt || Date.now()).toLocaleString())}</span><span class="memo-source">${escapeHtml(shorten(selected, 96))}</span></div><h3 class="memo-question">Q. ${escapeHtml(question)}</h3><p class="memo-answer">${formatExportMemoText(answer)}</p>${threadHtml}</div>`;
+    const head = `<div class="memo-head"><span class="badge">${escapeHtml(new Date(n.createdAt || Date.now()).toLocaleString())}</span>${!isSelectionNote ? `<span class="memo-source">${escapeHtml(shorten(source, 96))}</span>` : ""}</div>`;
+    const questionHtml = isSelectionNote
+      ? `<div class="memo-selected-box"><b>선택 구절</b><p>“${escapeHtml(source)}”</p></div><p class="memo-question memo-question-under"><span class="memo-elbow">ㄴ</span>${escapeHtml(question)}</p>`
+      : `<h3 class="memo-question">Q. ${escapeHtml(question)}</h3>`;
+    return `<div class="memo-export-item">${head}${questionHtml}<p class="memo-answer">${formatExportMemoText(answer)}</p>${threadHtml}</div>`;
   }).join("") : `<div class="card">저장된 메모가 없습니다.</div>`;
   return exportBlock("메모", "선택 구절 설명·추가 질문", body);
 }
@@ -1930,6 +1991,19 @@ function renderExportCommentsHtml() {
   const threads = ensureArray(state.botChatThreads);
   const body = threads.length ? threads.map((t) => `<div class="card"><h3>Q. ${escapeHtml(t.question || "")}</h3>${ensureArray(t.comments).map((c) => `<div class="comment"><b>${escapeHtml(c.author || "익명")}</b> <small>${escapeHtml(c.timeLabel || "방금 전")}</small><p>${escapeHtml(c.text || "")}</p>${ensureArray(c.sideReplies).map((r) => `<p class="muted">↳ ${escapeHtml(r.author || "익명")}: ${escapeHtml(r.text || "")}</p>`).join("")}</div>`).join("")}</div>`).join("") : `<div class="card">AI 댓글 스레드가 없습니다.</div>`;
   return exportBlock("AI 댓글", "질문 스레드·답글", body);
+}
+
+function memoToMarkdown(n) {
+  const selected = String(n.selectedText || "").trim();
+  const isSelectionNote = n.source === "selection" || (selected && selected !== "지문 전체 질문" && selected !== "지문 질문");
+  const source = selected || n.sourcePointer || "지문 전체 질문";
+  const question = n.question || (isSelectionNote ? "이 선택 구절 자세히 설명해줘" : "메모");
+  const answer = n.explanation?.simple || n.explanation?.answer || n.answer || "";
+  const thread = ensureArray(n.thread).map((m) => `- 추가 질문: ${mdEscape(m.question)}\n  - 답변: ${mdEscape(m.answer)}`).join("\n");
+  if (isSelectionNote) {
+    return `### 선택 구절 메모\n- 선택 구절: ${mdEscape(source)}\n- ㄴ 질문: ${mdEscape(question)}\n\n${mdEscape(answer)}${thread ? `\n\n${thread}` : ""}`;
+  }
+  return `### ${mdEscape(question)}\n- 관련 부분: ${mdEscape(source)}\n\n${mdEscape(answer)}${thread ? `\n\n${thread}` : ""}`;
 }
 
 
@@ -1941,17 +2015,40 @@ function buildMarkdownExport(options) {
   if (options.structure) parts.push(`\n## 구조\n\n### 흐름\n${bulletLines(a.flow)}\n\n### 구조 타임라인\n${ensureArray(a.structureTimeline).map((t) => `- ${mdEscape(t.label)}: ${mdEscape(t.description)}`).join("\n")}\n\n### 비교·대조\n${ensureArray(a.comparisons).map((c) => `- ${mdEscape(c.axis)}: ${mdEscape(c.a)} ↔ ${mdEscape(c.b)} - ${mdEscape(c.meaning)} (${mdEscape(c.sourceDetail)})`).join("\n")}`);
   if (options.concepts) parts.push(`\n## 개념\n\n${ensureArray(a.glossary).map((g) => `### ${mdEscape(g.term)}\n- 뜻: ${mdEscape(g.meaning)}\n- 지문 속 의미: ${mdEscape(g.inTextMeaning)}\n- 출처: ${mdEscape(g.sourceText)}`).join("\n\n")}\n\n## 헷갈리는 문장\n${ensureArray(a.trickySentences).map((t) => `- ${mdEscape(t.sentence)}\n  - 쉽게: ${mdEscape(t.easyRewrite)}\n  - 포인트: ${mdEscape(t.testPoint)}`).join("\n")}`);
   if (options.questions && state.questions) parts.push(buildQuestionsMarkdown(options.includeSolutions));
-  if (options.notes) parts.push(`\n## 메모\n\n${ensureArray(state.notes).map((n) => `### ${mdEscape(n.question || n.selectedText || "메모")}\n${mdEscape(n.explanation?.simple || n.answer || "")}\n${ensureArray(n.thread).map((m) => `- Q. ${mdEscape(m.question)}\n  A. ${mdEscape(m.answer)}`).join("\n")}`).join("\n\n")}`);
+  if (options.notes) parts.push(`\n## 메모\n\n${ensureArray(state.notes).map(memoToMarkdown).join("\n\n")}`);
   if (options.comments) parts.push(`\n## AI 댓글\n\n${ensureArray(state.botChatThreads).map((t) => `### Q. ${mdEscape(t.question)}\n${ensureArray(t.comments).map(commentToMarkdown).join("\n")}`).join("\n\n")}`);
   return parts.join("\n").replace(/\n{4,}/g, "\n\n\n");
 }
 
 function buildQuestionsMarkdown(includeSolutions) {
   const q = state.questions || {};
-  const parts = [`\n## 문제`];
-  ensureArray(q.multipleChoice).forEach((item, i) => { parts.push(`\n### 5지선다 ${i + 1}\n${mdEscape(item.question)}\n${ensureArray(item.choices).map((c) => `${normalizeChoiceNumber(c.number)} ${mdEscape(c.text)}`).join("\n")}`); if (includeSolutions) parts.push(`정답: ${normalizeChoiceNumber(item.answer)}\n출제 의도: ${mdEscape(item.sourceIntent)}\n해설: ${mdEscape(item.finalExplanation)}`); });
-  ensureArray(q.ox).forEach((item, i) => { parts.push(`\n### OX ${i + 1}\n${mdEscape(item.statement)}`); if (includeSolutions) parts.push(`정오: ${mdEscape(item.answer)}\n출제 의도: ${mdEscape(item.trap)}\n해설: ${mdEscape(item.explanation)}`); });
-  ensureArray(q.shortAnswer).forEach((item, i) => { parts.push(`\n### 서술형 ${i + 1}\n${mdEscape(item.question)}`); if (includeSolutions) parts.push(`출제 의도: ${mdEscape(item.type)}\n모범 답안: ${mdEscape(item.idealAnswer)}\n채점 요소:\n${bulletLines(item.gradingPoints)}`); });
+  const parts = [`
+## 문제`];
+  ensureArray(q.multipleChoice).forEach((item, i) => {
+    const view = cleanViewBox(item.viewBox || "");
+    const viewBlock = view ? `
+
+<보기>
+${mdEscape(view)}` : "";
+    parts.push(`
+### 5지선다 ${i + 1}
+${mdEscape(item.question)}${viewBlock}
+${ensureArray(item.choices).map((c) => `${normalizeChoiceNumber(c.number)} ${mdEscape(c.text)}`).join("\n")}`);
+    if (includeSolutions) parts.push(`정답: ${normalizeChoiceNumber(item.answer)}
+출제 의도: ${mdEscape(item.sourceIntent)}
+해설: ${mdEscape(item.finalExplanation)}`);
+  });
+  ensureArray(q.ox).forEach((item, i) => { parts.push(`
+### OX ${i + 1}
+${mdEscape(item.statement)}`); if (includeSolutions) parts.push(`정오: ${mdEscape(item.answer)}
+출제 의도: ${mdEscape(item.trap)}
+해설: ${mdEscape(item.explanation)}`); });
+  ensureArray(q.shortAnswer).forEach((item, i) => { parts.push(`
+### 서술형 ${i + 1}
+${mdEscape(item.question)}`); if (includeSolutions) parts.push(`출제 의도: ${mdEscape(item.type)}
+모범 답안: ${mdEscape(item.idealAnswer)}
+채점 요소:
+${bulletLines(item.gradingPoints)}`); });
   return parts.join("\n");
 }
 
@@ -2226,6 +2323,7 @@ function attachAppEvents() {
   document.querySelectorAll("[data-memo-follow-input]").forEach((el) => el.addEventListener("input", debounce(() => { state.memoFollowInputs[el.dataset.memoFollowInput] = el.value; }, 80)));
   document.querySelectorAll("[data-memo-follow-ask]").forEach((el) => el.addEventListener("click", () => runMemoFollowAsk(el.dataset.memoFollowAsk)));
   document.querySelectorAll("[data-memo-follow-quick]").forEach((el) => el.addEventListener("click", () => runMemoFollowAsk(el.dataset.memoFollowQuick, el.dataset.question)));
+  document.querySelectorAll("[data-delete-memo]").forEach((el) => el.addEventListener("click", () => deleteMemo(el.dataset.deleteMemo)));
   document.querySelector("#explainSelectionBtn")?.addEventListener("click", runSelectionExplain);
   document.querySelector("#closeLogPanel")?.addEventListener("click", () => { state.logOpen = false; render(); });
   document.querySelector("#logBackdrop")?.addEventListener("click", () => { state.logOpen = false; render(); });
@@ -2471,7 +2569,7 @@ async function runSelectionExplain() {
         memoContext: existing
       });
     }
-    state.notes.unshift({ id: uid("note"), selectedText, question: "", explanation, sourcePointer: selectedText, suggestedQuestions: ["더 쉽게 다시 설명해줘", "예시를 만들어줘", "문제 선지로 바뀌면 어떻게 돼?"], thread: [], createdAt: Date.now() });
+    state.notes.unshift({ id: uid("note"), selectedText, source: "selection", question: "", explanation, sourcePointer: selectedText, suggestedQuestions: ["더 쉽게 다시 설명해줘", "예시를 만들어줘", "문제 선지로 바뀌면 어떻게 돼?"], thread: [], createdAt: Date.now() });
     state.selectedText = "";
     state.tab = "notes";
   } catch (error) {
@@ -2549,6 +2647,7 @@ async function createMemoAnswer({ selectedText = "", question = "", source = "re
     state.notes.unshift({
       id: uid("note"),
       selectedText: selectedText || "지문 전체 질문",
+      source,
       question,
       explanation: { simple: result.answer },
       sourcePointer: result.sourcePointer || "",
