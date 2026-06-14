@@ -15,7 +15,6 @@ export const ANALYSIS_SCHEMA = {
     "comparisons",
     "glossary",
     "trickySentences",
-    "mindmap",
     "studyTips",
     "suggestedReaderQuestions"
   ],
@@ -142,40 +141,6 @@ export const ANALYSIS_SCHEMA = {
           whyHard: { type: "string" },
           easyRewrite: { type: "string" },
           testPoint: { type: "string" }
-        }
-      }
-    },
-    mindmap: {
-      type: "object",
-      additionalProperties: false,
-      required: ["nodes", "edges"],
-      properties: {
-        nodes: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["id", "label", "kind", "summary"],
-            properties: {
-              id: { type: "string" },
-              label: { type: "string" },
-              kind: { type: "string" },
-              summary: { type: "string" }
-            }
-          }
-        },
-        edges: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["source", "target", "label"],
-            properties: {
-              source: { type: "string" },
-              target: { type: "string" },
-              label: { type: "string" }
-            }
-          }
         }
       }
     },

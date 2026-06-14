@@ -120,9 +120,6 @@ const state = {
   questionPhase: "",
   records: loadRecords(),
   currentRecordId: null,
-  mindPositions: {},
-  mindPan: { x: 0, y: 0 },
-  mindZoom: 1,
   sideMenu: false,
   infoOpen: false,
   modelPickerTarget: null,
@@ -556,25 +553,6 @@ function normalizeAnalysisResult(raw = {}, passage = state.passage) {
     testPoint: String(t?.testPoint || "")
   })).filter((t) => t.sentence);
 
-  a.mindmap = a.mindmap && typeof a.mindmap === "object" ? a.mindmap : {};
-  a.mindmap.nodes = ensureArray(a.mindmap.nodes).map((n, i) => ({
-    id: String(n?.id || `n${i + 1}`),
-    label: String(n?.label || `개념 ${i + 1}`),
-    kind: String(n?.kind || (i === 0 ? "center" : "node")),
-    summary: String(n?.summary || "")
-  }));
-  if (!a.mindmap.nodes.length) a.mindmap.nodes = [{ id: "main", label: a.title, kind: "center", summary: a.overallSummary }];
-  const nodeIds = new Set(a.mindmap.nodes.map((n) => n.id));
-  a.mindmap.edges = ensureArray(a.mindmap.edges).map((e) => ({
-    source: String(e?.source || ""),
-    target: String(e?.target || ""),
-    label: String(e?.label || "")
-  })).filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target) && e.source !== e.target);
-  if (!a.mindmap.edges.length && a.mindmap.nodes.length > 1) {
-    const center = a.mindmap.nodes[0].id;
-    a.mindmap.edges = a.mindmap.nodes.slice(1).map((n) => ({ source: center, target: n.id, label: "연결" }));
-  }
-
   a.studyTips = ensureArray(a.studyTips).map(String).filter(Boolean);
   a.suggestedReaderQuestions = ensureArray(a.suggestedReaderQuestions).map(String).filter(Boolean).slice(0, 6);
   if (!a.suggestedReaderQuestions.length) {
@@ -755,7 +733,6 @@ function render({ preserveScroll = true } = {}) {
   attachAppEvents();
   attachToastEvents();
   requestAnimationFrame(() => {
-    renderMindmap();
     if (preserveScroll) {
       for (const [key, top] of panelScrolls) {
         const el = document.querySelector(`[data-scroll-key="${key}"]`);
@@ -774,7 +751,7 @@ function renderIntro() {
         <div class="intro-card">
           <div class="intro-badge">✦ 반짝반짝, 저는 국어 지문 분석기에요</div>
           <h1><span class="gradient-text">반짝국어</span><br/>AI Reader</h1>
-          <p>지문을 넣으면 문단별 요약, 구조 타임라인, 색상별 형광펜, 인터랙티브 마인드맵, 고난도 문제와 OX·서술형 퀴즈까지 한 번에 정리합니다. 암기가 아니라 이해와 추론을 위한 도구입니다.</p>
+          <p>지문을 넣으면 문단별 요약, 구조 타임라인, 색상별 형광펜, 고난도 문제와 OX·서술형 퀴즈까지 한 번에 정리합니다. 암기가 아니라 이해와 추론을 위한 도구입니다.</p>
           <div class="intro-actions">
             <button class="btn primary" id="startBtn">시작하기</button>
             <button class="btn" id="demoStartBtn">샘플 지문으로 보기</button>
@@ -792,7 +769,6 @@ function renderApp() {
       <section class="layout">
         ${renderReaderPanel()}
         ${renderAnalysisPanel()}
-        ${renderMindmapPanel()}
       </section>
       ${renderTooltip()}
       ${renderDrawer()}
@@ -932,7 +908,7 @@ function renderLoading() {
   const isQuestion = state.loading === "questions";
   const questionPhase = state.questionPhase || "문제 제작 준비";
   const steps = state.loading === "analysis"
-    ? ["문단 분리", "띄어쓰기 정돈", "핵심 주장 탐색", "형광펜 설계", "마인드맵 구성", "학습 포인트 정리"]
+    ? ["문단 분리", "띄어쓰기 정돈", "핵심 주장 탐색", "형광펜 설계", "학습 포인트 정리"]
     : state.loading === "note"
       ? ["선택 구절 확인", "앞뒤 문맥 연결", "쉬운 설명 작성", "시험 포인트 정리"]
       : state.loading === "cleanup"
@@ -1485,28 +1461,6 @@ function renderBotComment(comment, threadId, depth = 0) {
 function getBotInitial(name = "") {
   const clean = String(name || "AI").replace(/\s+/g, "").trim();
   return clean ? clean.slice(0, 1) : "A";
-}
-
-function renderMindmapPanel() {
-  if (!state.analysis) return "";
-  return `
-    <section class="panel mindmap-panel">
-      <div class="panel-head">
-        <div class="panel-title">인터랙티브 마인드맵 <small>노드 드래그 · 빈 공간 이동 · 확대/축소 지원</small></div>
-        <div class="mind-controls">
-          <button class="btn small" id="mindZoomOutBtn" title="축소">−</button>
-          <span class="zoom-label">${Math.round((state.mindZoom || 1) * 100)}%</span>
-          <button class="btn small" id="mindZoomInBtn" title="확대">＋</button>
-          <button class="btn small" id="resetMindBtn">배치 초기화</button>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div class="mindmap-wrap" id="mindmapWrap">
-          <svg class="mindmap-svg" id="mindmapSvg" viewBox="0 0 1900 1200" preserveAspectRatio="xMidYMid meet"></svg>
-          <div class="mindmap-help">노드 드래그 · 빈 공간/휠클릭 드래그 이동 · 마우스 휠 확대/축소 · 터치 이동</div>
-        </div>
-      </div>
-    </section>`;
 }
 
 function renderTooltip() {
@@ -2126,9 +2080,6 @@ function attachAppEvents() {
     state.botChatInput = "";
     state.botReplyInputs = {};
     state.botReplyOpen = {};
-    state.mindPositions = {};
-    state.mindPan = { x: 0, y: 0 };
-    state.mindZoom = 1;
     notify("info", "새 분석 노트를 만들었습니다", "이전 작업은 저장 버튼을 눌러 저장할 수 있습니다.");
     render();
   });
@@ -2152,9 +2103,6 @@ function attachAppEvents() {
       state.qnaMessages = snap.qnaMessages || {};
       state.qnaOpen = snap.qnaOpen || {};
       state.botChatThreads = ensureArray(snap.botChatThreads);
-      state.mindPositions = snap.mindPositions || {};
-      state.mindPan = snap.mindPan || { x: 0, y: 0 };
-      state.mindZoom = snap.mindZoom || 1;
       state.sampleActive = false;
       notify("info", "내 지문으로 돌아왔습니다", "샘플 보기 전 분석·문제·메모 상태를 유지했습니다.");
     } else {
@@ -2166,7 +2114,6 @@ function attachAppEvents() {
         shortGrades: structuredCloneSafe(state.shortGrades), qnaInputs: structuredCloneSafe(state.qnaInputs),
         qnaMessages: structuredCloneSafe(state.qnaMessages), qnaOpen: structuredCloneSafe(state.qnaOpen),
         botChatThreads: structuredCloneSafe(state.botChatThreads),
-        mindPositions: structuredCloneSafe(state.mindPositions), mindPan: { ...(state.mindPan || { x: 0, y: 0 }) }, mindZoom: state.mindZoom || 1
       };
       state.userPassageSnapshot = state.userWorkspaceSnapshot.passage;
       state.passage = SAMPLE_PASSAGE;
@@ -2183,10 +2130,7 @@ function attachAppEvents() {
       state.botChatInput = "";
       state.botReplyInputs = {};
       state.botReplyOpen = {};
-      state.mindPositions = {};
-      state.mindPan = { x: 0, y: 0 };
-      state.mindZoom = 1;
-      state.sampleActive = true;
+            state.sampleActive = true;
       state.tab = "summary";
     }
     render();
@@ -2327,9 +2271,6 @@ function attachAppEvents() {
   document.querySelector("#explainSelectionBtn")?.addEventListener("click", runSelectionExplain);
   document.querySelector("#closeLogPanel")?.addEventListener("click", () => { state.logOpen = false; render(); });
   document.querySelector("#logBackdrop")?.addEventListener("click", () => { state.logOpen = false; render(); });
-  document.querySelector("#resetMindBtn")?.addEventListener("click", () => { state.mindPositions = {}; state.mindPan = { x: 0, y: 0 }; state.mindZoom = 1; render(); });
-  document.querySelector("#mindZoomInBtn")?.addEventListener("click", () => { state.mindZoom = clamp((state.mindZoom || 1) + 0.15, 0.55, 2.2); render(); });
-  document.querySelector("#mindZoomOutBtn")?.addEventListener("click", () => { state.mindZoom = clamp((state.mindZoom || 1) - 0.15, 0.55, 2.2); render(); });
   attachHighlightEvents();
   attachSelectionEvents();
 }
@@ -2433,9 +2374,6 @@ async function runAnalysis() {
     }
     state.questions = null;
     resetQuestionState();
-    state.mindPositions = {};
-    state.mindPan = { x: 0, y: 0 };
-    state.mindZoom = 1;
     state.tab = "summary";
     state.readerAskCollapsed = false;
   } catch (error) {
@@ -3227,254 +3165,4 @@ function attachSelectionEvents() {
   });
 }
 
-function renderMindmap(reset = false) {
-  const svg = document.querySelector("#mindmapSvg");
-  const wrap = document.querySelector("#mindmapWrap");
-  if (!svg || !wrap || !state.analysis?.mindmap) return;
-  const nodes = state.analysis.mindmap.nodes || [];
-  const edges = state.analysis.mindmap.edges || [];
-  if (!nodes.length) return;
-  if (reset) state.mindPositions = {};
-
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const center = nodes.find((n) => String(n.kind || "").toLowerCase().includes("center")) || nodes[0];
-  const childrenBySource = new Map();
-  for (const e of edges) {
-    if (!childrenBySource.has(e.source)) childrenBySource.set(e.source, []);
-    childrenBySource.get(e.source).push(e.target);
-  }
-  let roots = (childrenBySource.get(center.id) || []).map((id) => byId.get(id)).filter(Boolean);
-  if (!roots.length) roots = nodes.filter((n) => n.id !== center.id).slice(0, 7);
-
-  const cx = 950;
-  const cy = 600;
-  function polar(angleDeg, radius) {
-    const a = (angleDeg * Math.PI) / 180;
-    return { x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius };
-  }
-
-  function defaultShape(node, level = 1, branch = 0) {
-    if (node.id === center.id) return { x: cx, y: cy, rx: 122, ry: 58, level: 0, branch: 0 };
-    const base = level === 1 ? { rx: 116, ry: 48 } : { rx: 96, ry: 40 };
-    return { ...base, level, branch };
-  }
-
-  const assigned = new Set([center.id]);
-  const defaultPositions = new Map();
-  defaultPositions.set(center.id, defaultShape(center, 0, 0));
-
-  const rootCount = roots.length;
-  const startAngle = rootCount <= 3 ? -90 : -110;
-  const span = rootCount <= 3 ? 180 : 300;
-  roots.forEach((root, i) => {
-    const angle = rootCount === 1 ? 0 : startAngle + (span * i) / Math.max(1, rootCount - 1);
-    const pos = polar(angle, 330);
-    defaultPositions.set(root.id, { ...defaultShape(root, 1, i % 8), ...pos, angle });
-    assigned.add(root.id);
-    const childIds = (childrenBySource.get(root.id) || []).filter((id) => id !== center.id && byId.has(id));
-    const spread = Math.min(58, Math.max(24, 96 / Math.max(1, childIds.length)));
-    childIds.forEach((cid, ci) => {
-      const child = byId.get(cid);
-      const childAngle = angle + (ci - (childIds.length - 1) / 2) * spread;
-      const childPos = polar(childAngle, 570);
-      defaultPositions.set(cid, { ...defaultShape(child, 2, i % 8), ...childPos, angle: childAngle });
-      assigned.add(cid);
-      const grandIds = (childrenBySource.get(cid) || []).filter((id) => byId.has(id));
-      grandIds.slice(0, 2).forEach((gid, gi) => {
-        const g = byId.get(gid);
-        const ga = childAngle + (gi - .5) * 22;
-        defaultPositions.set(gid, { ...defaultShape(g, 2, i % 8), ...polar(ga, 720), angle: ga, rx: 82, ry: 35 });
-        assigned.add(gid);
-      });
-    });
-  });
-
-  nodes.filter((n) => !assigned.has(n.id)).forEach((n, i) => {
-    const pos = polar(-80 + i * 26, 720);
-    defaultPositions.set(n.id, { ...defaultShape(n, 2, i % 8), ...pos, angle: -80 + i * 26 });
-  });
-
-  nodes.forEach((node) => {
-    const base = defaultPositions.get(node.id) || defaultShape(node, 2, 0);
-    if (!state.mindPositions[node.id]) state.mindPositions[node.id] = base;
-    else state.mindPositions[node.id] = { ...base, ...state.mindPositions[node.id] };
-  });
-
-  const virtualEdges = edges.length ? edges : roots.map((r) => ({ source: center.id, target: r.id, label: "구성" }));
-  const edgeHtml = virtualEdges.map((e) => {
-    const s = state.mindPositions[e.source];
-    const t = state.mindPositions[e.target];
-    if (!s || !t) return "";
-    const dx = t.x - s.x;
-    const dy = t.y - s.y;
-    const len = Math.max(1, Math.hypot(dx, dy));
-    const sx = s.x + (dx / len) * (s.rx || 90);
-    const sy = s.y + (dy / len) * (s.ry || 40);
-    const tx = t.x - (dx / len) * (t.rx || 90);
-    const ty = t.y - (dy / len) * (t.ry || 40);
-    const mx = (sx + tx) / 2;
-    const my = (sy + ty) / 2;
-    const curve = 28;
-    const c1x = sx + dx * .36 - (dy / len) * curve;
-    const c1y = sy + dy * .36 + (dx / len) * curve;
-    const c2x = sx + dx * .64 - (dy / len) * curve;
-    const c2y = sy + dy * .64 + (dx / len) * curve;
-    return `<path class="edge branch-${t.branch || 0}" d="M ${sx} ${sy} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tx} ${ty}"></path><text class="edge-label" x="${mx}" y="${my - 8}" text-anchor="middle">${escapeHtml(e.label || "")}</text>`;
-  }).join("");
-
-  const nodeHtml = nodes.map((n) => {
-    const p = state.mindPositions[n.id];
-    const labelLines = svgTextLines(n.label || "", p.level === 0 ? 18 : 16, p.level === 0 ? 2 : 2);
-    const summaryLines = svgTextLines(n.summary || n.kind || "", p.level === 0 ? 22 : 18, p.level === 0 ? 1 : 2);
-    const labelY = p.level === 0 ? -12 : -8;
-    const summaryY = p.level === 0 ? 24 : 20;
-    return `<g class="node node-bubble branch-${p.branch || 0} level-${p.level} ${p.level >= 2 ? "leaf-node" : ""}" data-node="${escapeHtml(n.id)}" transform="translate(${p.x} ${p.y})">
-      <ellipse rx="${p.rx}" ry="${p.ry}"></ellipse>
-      <text class="node-title" x="0" y="${labelY}">${labelLines.map((line, i) => `<tspan x="0" dy="${i === 0 ? 0 : 17}">${escapeHtml(line)}</tspan>`).join("")}</text>
-      <text class="node-summary" x="0" y="${summaryY}">${summaryLines.map((line, i) => `<tspan x="0" dy="${i === 0 ? 0 : 14}">${escapeHtml(line)}</tspan>`).join("")}</text>
-    </g>`;
-  }).join("");
-
-  const pan = state.mindPan || { x: 0, y: 0 };
-  const zoom = state.mindZoom || 1;
-  svg.innerHTML = `<rect class="mind-bg" x="0" y="0" width="1900" height="1200" fill="transparent"></rect><g id="mindCanvas" transform="translate(${pan.x} ${pan.y}) scale(${zoom})"><g class="edges">${edgeHtml}</g><g class="nodes">${nodeHtml}</g></g>`;
-  attachMindmapEvents(svg, wrap);
-}
-
-function svgTextLines(text, limit = 16, maxLines = 2) {
-  const clean = String(text || "").replace(/\s+/g, " ").trim();
-  if (!clean) return [""];
-  const out = [];
-  let cur = "";
-  for (const ch of clean) {
-    const next = cur + ch;
-    if (next.length > limit && cur) {
-      out.push(cur);
-      cur = ch;
-    } else cur = next;
-  }
-  if (cur) out.push(cur);
-  return out.slice(0, maxLines).map((line, i) => i === maxLines - 1 && out.length > maxLines ? `${line.slice(0, Math.max(1, limit - 1))}…` : line);
-}
-
-function attachMindmapEvents(svg, wrap) {
-  let dragging = null;
-  let activeEl = null;
-  let moved = false;
-  let offset = { x: 0, y: 0 };
-  const tooltip = document.querySelector("#tooltip");
-  const toSvgPoint = (event) => {
-    const pt = svg.createSVGPoint();
-    pt.x = event.clientX;
-    pt.y = event.clientY;
-    const raw = pt.matrixTransform(svg.getScreenCTM().inverse());
-    const pan = state.mindPan || { x: 0, y: 0 };
-    const zoom = state.mindZoom || 1;
-    return { x: (raw.x - pan.x) / zoom, y: (raw.y - pan.y) / zoom };
-  };
-  const toRawSvgPoint = (event) => {
-    const pt = svg.createSVGPoint();
-    pt.x = event.clientX;
-    pt.y = event.clientY;
-    return pt.matrixTransform(svg.getScreenCTM().inverse());
-  };
-
-  svg.querySelectorAll(".node").forEach((el) => {
-    const nodeId = el.dataset.node;
-    const node = state.analysis.mindmap.nodes.find((n) => n.id === nodeId);
-    el.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragging = nodeId;
-      activeEl = el;
-      moved = false;
-      el.classList.add("dragging");
-      const pt = toSvgPoint(e);
-      offset.x = pt.x - state.mindPositions[nodeId].x;
-      offset.y = pt.y - state.mindPositions[nodeId].y;
-      try { svg.setPointerCapture(e.pointerId); } catch {}
-    });
-    el.addEventListener("mouseenter", () => {
-      if (!tooltip || !node) return;
-      tooltip.querySelector(".t-title").textContent = node.label || "마인드맵";
-      tooltip.querySelector(".t-body").textContent = node.summary || "클릭하면 상세 설명이 열립니다.";
-      tooltip.classList.add("show");
-    });
-    el.addEventListener("mousemove", (e) => {
-      if (!tooltip) return;
-      const x = Math.min(window.innerWidth - 380, e.clientX + 16);
-      const y = Math.min(window.innerHeight - 160, e.clientY + 18);
-      tooltip.style.left = `${Math.max(12, x)}px`;
-      tooltip.style.top = `${Math.max(12, y)}px`;
-    });
-    el.addEventListener("mouseleave", () => tooltip?.classList.remove("show"));
-    el.addEventListener("click", () => {
-      if (moved || !node) return;
-      state.detail = { title: node.label, body: node.summary, extra: "이 노드와 연결된 가지를 따라가면 지문의 전개 흐름을 볼 수 있습니다." };
-      render();
-    });
-  });
-
-
-  let panning = false;
-  let panStart = { x: 0, y: 0 };
-  let panBase = { x: 0, y: 0 };
-  svg.addEventListener("auxclick", (e) => { if (e.button === 1) e.preventDefault(); });
-  svg.addEventListener("pointerdown", (e) => {
-    if (dragging) return;
-    const isBackground = e.target === svg || e.target.classList?.contains("mind-bg") || e.target.classList?.contains("edge") || e.button === 1;
-    if (!isBackground) return;
-    e.preventDefault();
-    panning = true;
-    panStart = toRawSvgPoint(e);
-    panBase = { ...(state.mindPan || { x: 0, y: 0 }) };
-    wrap.classList.add("panning");
-    try { svg.setPointerCapture(e.pointerId); } catch {}
-  });
-  svg.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.08 : 0.08;
-    state.mindZoom = clamp((state.mindZoom || 1) + delta, 0.55, 2.2);
-    const canvas = svg.querySelector("#mindCanvas");
-    if (canvas) canvas.setAttribute("transform", `translate(${(state.mindPan || {x:0,y:0}).x} ${(state.mindPan || {x:0,y:0}).y}) scale(${state.mindZoom || 1})`);
-    const label = document.querySelector(".zoom-label");
-    if (label) label.textContent = `${Math.round((state.mindZoom || 1) * 100)}%`;
-  }, { passive: false });
-
-  svg.addEventListener("pointermove", (e) => {
-    if (panning) {
-      const pt = toRawSvgPoint(e);
-      state.mindPan = { x: clamp(panBase.x + pt.x - panStart.x, -1100, 1100), y: clamp(panBase.y + pt.y - panStart.y, -760, 760) };
-      const canvas = svg.querySelector("#mindCanvas");
-      if (canvas) canvas.setAttribute("transform", `translate(${state.mindPan.x} ${state.mindPan.y}) scale(${state.mindZoom || 1})`);
-      return;
-    }
-    if (dragging) {
-      moved = true;
-      const pt = toSvgPoint(e);
-      const cur = state.mindPositions[dragging];
-      const next = { ...cur, x: clamp(pt.x - offset.x, 90, 1810), y: clamp(pt.y - offset.y, 85, 1110) };
-      state.mindPositions[dragging] = next;
-      if (activeEl) activeEl.setAttribute("transform", `translate(${next.x} ${next.y})`);
-    }
-  });
-  svg.addEventListener("pointerup", () => {
-    if (dragging) renderMindmap();
-    dragging = null;
-    activeEl = null;
-    panning = false;
-    wrap.classList.remove("panning");
-    svg.querySelectorAll(".dragging").forEach((el) => el.classList.remove("dragging"));
-  });
-  svg.addEventListener("pointerleave", () => {
-    if (dragging) renderMindmap();
-    dragging = null;
-    activeEl = null;
-    panning = false;
-    wrap.classList.remove("panning");
-  });
-}
-
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-render();

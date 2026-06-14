@@ -24,7 +24,7 @@ if (!html.includes('src/app.js')) throw new Error('index.html does not load app.
 if (!html.includes('src/styles.css')) throw new Error('index.html does not load styles.css');
 
 const app = fs.readFileSync(path.join(root, 'src/app.js'), 'utf8');
-for (const token of ['시작하기', '분석하기', '문제 제작', '인터랙티브 마인드맵', '전문 추론 모델 사용']) {
+for (const token of ['시작하기', '분석하기', '문제 제작', '전문 추론 모델 사용']) {
   if (!app.includes(token)) throw new Error(`app missing token: ${token}`);
 }
 

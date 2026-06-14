@@ -81,22 +81,6 @@ export function createDemoAnalysis(passage = SAMPLE_PASSAGE) {
       { sentence: "기술이 인간의 판단을 대신하기 시작하는 방식에 있다.", paragraphId: "p1", whyHard: "기술 자체가 나쁘다는 뜻이 아니라 판단 대체 방식이 문제라는 제한이 들어 있다.", easyRewrite: "기술을 전부 나쁘다고 말하는 것이 아니다. 사용자가 스스로 판단해야 할 부분까지 기술이 대신 정해 주기 시작할 때 자유가 줄어들 수 있다는 뜻이다.", testPoint: "필자의 입장을 기술 거부론으로 오해하지 않는지 묻기 좋다." },
       { sentence: "기술이 제시한 선택지가 어떤 가능성을 열고 어떤 가능성을 닫는지 살피는 일", paragraphId: "p4", whyHard: "‘가능성을 연다/닫는다’는 추상 표현이 들어 있다.", easyRewrite: "기술이 어떤 일을 쉽게 하도록 도와주는지와 동시에, 어떤 선택지를 보지 못하게 만드는지를 함께 따져야 한다는 뜻이다.", testPoint: "보기 적용 문제에서 핵심 판단 기준이 된다." }
     ],
-    mindmap: {
-      nodes: [
-        { id: "main", label: "기술 시대의 자유", kind: "center", summary: "편리함과 자유의 관계를 비판적으로 검토한다." },
-        { id: "problem", label: "판단 대체", kind: "issue", summary: "기술이 인간의 선택을 대신할 때 문제가 생긴다." },
-        { id: "contrast", label: "도구 vs 지능형 기술", kind: "contrast", summary: "전통적 도구와 현대 기술의 역할 차이." },
-        { id: "balance", label: "유용성 인정", kind: "support", summary: "기술은 인간의 한계를 보완할 수 있다." },
-        { id: "attitude", label: "비판적 이해", kind: "claim", summary: "거부가 아니라 작동 방식에 대한 성찰이 필요하다." }
-      ],
-      edges: [
-        { source: "main", target: "problem", label: "문제의식" },
-        { source: "problem", target: "contrast", label: "설명" },
-        { source: "contrast", target: "balance", label: "균형" },
-        { source: "balance", target: "attitude", label: "결론" },
-        { source: "attitude", target: "main", label: "자유의 조건" }
-      ]
-    },
     studyTips: ["‘기술이 나쁘다’가 아니라 ‘기술의 판단 과정을 이해해야 한다’가 핵심이다.", "보기 문제에서는 기술이 어떤 가능성을 열고 닫는지 따져라.", "전통적 도구와 지능형 기술의 차이를 정리하면 글 전체가 잡힌다."],
     suggestedReaderQuestions: [
       "추천 알고리즘이 자유를 넓히는지 좁히는지 헷갈려요",
