@@ -54,5 +54,8 @@ globalThis.sessionStorage = { getItem: () => '', setItem: noop, removeItem: noop
 globalThis.localStorage = { getItem: () => null, setItem: noop, removeItem: noop };
 globalThis.requestAnimationFrame = (cb) => { if (typeof cb === 'function') cb(); };
 await import(`../src/app.js?validate=${Date.now()}`);
+if (!fakeEl.innerHTML || !fakeEl.innerHTML.includes('반짝국어')) {
+  throw new Error('app did not render initial screen');
+}
 
-console.log('static validation passed and app module import passed');
+console.log('static validation passed and app initial render passed');
