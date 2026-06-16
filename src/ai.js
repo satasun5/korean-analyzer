@@ -108,6 +108,56 @@ function makeParseDebug({ text, error, schemaName, model, data }) {
   ].join("\n");
 }
 
+function getRuntimeInfo() {
+  const nav = typeof navigator !== "undefined" ? navigator : null;
+  const loc = typeof location !== "undefined" ? location : null;
+  return {
+    origin: loc?.origin || "unknown",
+    protocol: loc?.protocol || "unknown",
+    online: nav?.onLine ?? "unknown",
+    userAgent: nav?.userAgent || "unknown"
+  };
+}
+
+function makeNetworkDebug({ error, schemaName, model, payloadLength, attempt }) {
+  const runtime = getRuntimeInfo();
+  return [
+    `schemaName: ${schemaName || "unknown"}`,
+    `model: ${model || "unknown"}`,
+    `endpoint: ${ENDPOINT}`,
+    `origin: ${runtime.origin}`,
+    `protocol: ${runtime.protocol}`,
+    `browserOnline: ${runtime.online}`,
+    `payloadLength: ${payloadLength}`,
+    `attempt: ${attempt}`,
+    `errorName: ${error?.name || "unknown"}`,
+    `errorMessage: ${error?.message || String(error)}`,
+    "",
+    "[확인할 것]",
+    "1. 브라우저 개발자도구 Console/Network에서 responses 요청이 CORS, blocked, ERR_NETWORK, ERR_CONNECTION_RESET 중 무엇인지 확인",
+    "2. 광고차단/보안앱/학교망/VPN이 api.openai.com 요청을 막는지 확인",
+    "3. 같은 키와 같은 지문으로 127.0.0.1 로컬 서버에서 되는지 확인",
+    "4. 요청 본문이 지나치게 크면 지문을 조금 줄여 재시도"
+  ].join("\n");
+}
+
+async function fetchWithRetry(url, options, retries = 1) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
+    try {
+      return await fetch(url, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt > retries) {
+        error.attempt = attempt;
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+  }
+  throw lastError;
+}
+
 async function callResponses({ apiKey, model, instructions, prompt, schema, schemaName, reasoningMode, reasoningEffort, maxOutputTokens = 12000 }) {
   if (!apiKey) throw new Error("API 키가 없습니다. 데모 모드를 사용하거나 키를 입력해 주세요.");
 
@@ -133,18 +183,28 @@ async function callResponses({ apiKey, model, instructions, prompt, schema, sche
     body.temperature = 0.35;
   }
 
+  const requestPayload = JSON.stringify(body);
   let response;
   try {
-    response = await fetch(ENDPOINT, {
+    response = await fetchWithRetry(ENDPOINT, {
       method: "POST",
+      mode: "cors",
+      cache: "no-store",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`
       },
-      body: JSON.stringify(body)
-    });
+      body: requestPayload
+    }, 1);
   } catch (error) {
-    throw new Error(`네트워크 요청 실패: ${error?.message || error}`);
+    const details = makeNetworkDebug({
+      error,
+      schemaName,
+      model,
+      payloadLength: requestPayload.length,
+      attempt: error?.attempt || 1
+    });
+    throw new Error(`네트워크 요청 실패: ${error?.message || error}\n\n${details}`);
   }
 
   const raw = await response.text().catch(() => "");
